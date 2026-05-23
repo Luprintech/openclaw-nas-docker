@@ -34,6 +34,12 @@ Tested on Synology. Should work on any NAS that runs Docker
 
 ---
 
+## Video tutorial
+
+[![Watch the installation walkthrough on YouTube](https://img.youtube.com/vi/lEqvOU_WuP0/maxresdefault.jpg)](https://youtu.be/lEqvOU_WuP0?si=V4EjXpC46ehEahsi)
+
+---
+
 ## First install, step by step
 
 This guide assumes you are installing OpenClaw on a NAS inside your LAN.
@@ -160,11 +166,21 @@ The installer handles everything automatically:
 - Pulls and starts the Docker Compose stack using the pre-built GHCR image.
 - Applies the allowed Control UI origins.
 
-After install, add your AI provider key(s) to `.env`:
+After install, add your AI provider key(s) to `.env`.
+
+**Option A — via SSH (Synology doesn't include `nano`, use `vi`):**
 
 ```bash
-nano .env
+vi .env
 ```
+
+Basic `vi` commands:
+- Press `i` to enter insert mode and edit
+- Press `Esc` when done editing
+- Type `:wq` and press `Enter` to save and exit
+- Type `:q!` and press `Enter` to exit without saving
+
+**Option B — via File Station:** open File Station, navigate to the `openclaw` folder, right-click `.env` → *Open with Text Editor*.
 
 Fill in at least one provider:
 
