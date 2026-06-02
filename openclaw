@@ -74,7 +74,12 @@ cmd_update() {
     command -v git >/dev/null 2>&1 || error "git is required to update a cloned repo"
     git pull --ff-only
   else
-    printf 'No .git directory found; skipping git pull.\n' >&2
+    printf 'Downloading latest stack files from GitHub...\n'
+    local base_url="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
+    curl -fsSL "$base_url/docker-compose.yml" -o docker-compose.yml
+    curl -fsSL "$base_url/openclaw"           -o openclaw
+    chmod +x openclaw
+    printf 'Stack files updated.\n'
   fi
 
   compose --profile https-local pull
