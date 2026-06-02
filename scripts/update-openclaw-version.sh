@@ -11,8 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LAST_FILE="$PROJECT_DIR/.last-openclaw-version"
 
-IMAGE_REPOSITORY="openclaw/openclaw"
-REGISTRY="ghcr.io"
+GITHUB_REPOSITORY="openclaw/openclaw"
 DRY_RUN=false
 
 usage() {
@@ -62,26 +61,18 @@ read_current_version() {
 }
 
 fetch_latest_version() {
-  local token tags
+  local tag
 
-  token="$(
-    curl -fsSL --max-time 10 "https://${REGISTRY}/token?scope=repository:${IMAGE_REPOSITORY}:pull" |
-      jq -r '.token // empty'
-  )"
-  [[ -n "$token" ]] || error "Could not obtain GHCR pull token (check network connectivity)."
-
-  tags="$(
+  tag="$(
     curl -fsSL --max-time 15 \
-      -H "Authorization: Bearer ${token}" \
-      "https://${REGISTRY}/v2/${IMAGE_REPOSITORY}/tags/list?n=1000" |
-      jq -r '.tags[]?'
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" |
+      jq -r '.tag_name // empty'
   )"
-  [[ -n "$tags" ]] || error "No tags returned by GHCR."
+  [[ -n "$tag" ]] || error "Could not fetch latest release from GitHub (check network connectivity)."
 
-  printf '%s\n' "$tags" |
-    grep -E '^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9]+)?$' |
-    sort -V |
-    tail -n 1
+  # Strip leading 'v' if present (e.g. v2026.5.28 -> 2026.5.28)
+  printf '%s\n' "${tag#v}"
 }
 
 apply_version() {
@@ -93,8 +84,6 @@ main() {
   parse_args "$@"
   need_command curl
   need_command jq
-  need_command sort
-  need_command grep
 
   local current latest
   current="$(read_current_version)"
