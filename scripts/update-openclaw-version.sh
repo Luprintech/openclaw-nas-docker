@@ -61,7 +61,7 @@ read_current_version() {
 }
 
 fetch_latest_version() {
-  local tag
+  local tag version docker_token http_code
 
   tag="$(
     curl -fsSL --max-time 15 \
@@ -72,7 +72,31 @@ fetch_latest_version() {
   [[ -n "$tag" ]] || error "Could not fetch latest release from GitHub (check network connectivity)."
 
   # Strip leading 'v' if present (e.g. v2026.5.28 -> 2026.5.28)
-  printf '%s\n' "${tag#v}"
+  version="${tag#v}"
+
+  # Verify the Docker image is actually published on GHCR before pinning.
+  # GitHub releases are published before Docker images — we wait for both.
+  docker_token="$(
+    curl -fsSL --max-time 10 \
+      "https://ghcr.io/token?scope=repository:openclaw/openclaw:pull" |
+      jq -r '.token // empty'
+  )"
+  if [[ -n "$docker_token" ]]; then
+    http_code="$(
+      curl -fsSL -o /dev/null -w '%{http_code}' --max-time 10 \
+        -H "Authorization: Bearer ${docker_token}" \
+        "https://ghcr.io/v2/openclaw/openclaw/manifests/${version}" 2>/dev/null || true
+    )"
+    if [[ "$http_code" != "200" ]]; then
+      printf 'Docker image ghcr.io/openclaw/openclaw:%s not yet available (HTTP %s) — keeping current pin.\n' \
+        "$version" "$http_code" >&2
+      # Return the current pinned version so the script reports "already up to date"
+      read_current_version
+      return
+    fi
+  fi
+
+  printf '%s\n' "$version"
 }
 
 apply_version() {
