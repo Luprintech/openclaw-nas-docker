@@ -85,6 +85,7 @@ fetch_latest_version() {
     http_code="$(
       curl -fsSL -o /dev/null -w '%{http_code}' --max-time 10 \
         -H "Authorization: Bearer ${docker_token}" \
+        -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
         "https://ghcr.io/v2/openclaw/openclaw/manifests/${version}" 2>/dev/null || true
     )"
     if [[ "$http_code" != "200" ]]; then
