@@ -398,7 +398,7 @@ After that, `./openclaw pip install` works and future `./openclaw update` calls 
 ### Method B — directly inside the container
 
 ```bash
-docker exec -it openclaw-openclaw-gateway-1 bash
+docker compose exec openclaw-gateway bash
 pip install <skill-package>
 exit
 ```
