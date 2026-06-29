@@ -54,7 +54,7 @@ services:
       - ./config:/home/node/.openclaw
       - ./workspace:/home/node/.openclaw/workspace
 
-    entrypoint: []
+    entrypoint: ["/home/node/entrypoint.sh"]
     command: ["node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "lan", "--port", "18789"]
 
     healthcheck:
