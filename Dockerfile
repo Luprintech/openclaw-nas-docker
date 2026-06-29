@@ -37,7 +37,10 @@ RUN apt-get update && \
       procps \
       ffmpeg \
       tmux \
-      wget && \
+      wget \
+      python3 \
+      python3-pip \
+      python3-venv && \
     rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI (gh) for github skill
@@ -61,6 +64,12 @@ RUN mkdir -p /home/node/.npm-global && \
 
 ENV NPM_CONFIG_PREFIX=/home/node/.npm-global
 ENV PATH="/home/node/.npm-global/bin:${PATH}"
+
+ENV VIRTUAL_ENV=/home/node/.openclaw/python-venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+COPY --chown=node:node entrypoint.sh /home/node/entrypoint.sh
+RUN chmod +x /home/node/entrypoint.sh
 
 USER node
 
