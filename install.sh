@@ -657,6 +657,7 @@ OpenClaw:
   message <args>        Send a message (e.g. message send --target foo --message "hi")
   agent <args>          Talk to the assistant (e.g. agent --message "hi")
   update                Pull latest image and restart stack
+  pip <args>            Run pip inside the gateway container (e.g. pip install requests)
 
 Stack:
   start                 Start Docker Compose stack
@@ -738,6 +739,10 @@ cmd_claude() {
   compose --profile cli run --rm -it openclaw-cli claude "$@"
 }
 
+cmd_pip() {
+  compose exec openclaw-gateway pip "$@"
+}
+
 main() {
   local command="${1:-help}"
   [[ $# -gt 0 ]] && shift || true
@@ -752,6 +757,7 @@ main() {
     message) openclaw_cli message "$@" ;;
     agent) openclaw_cli agent "$@" ;;
     update) cmd_update "$@" ;;
+    pip) cmd_pip "$@" ;;
     start|up) compose_up "$@" ;;
     stop|down) compose down "$@" ;;
     restart) compose_restart "$@" ;;
