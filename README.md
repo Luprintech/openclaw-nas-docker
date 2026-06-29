@@ -377,13 +377,31 @@ Raw CLI pass-through:
 
 ## Installing Python skills
 
-The container includes Python 3 and pip. You can install any Python-based skill directly from inside the container, and the packages **persist across restarts and updates**.
+The container includes Python 3 and pip. Packages are stored in a virtual environment at `/home/node/.openclaw/python-venv`, inside the persisted `config/` volume — they survive container restarts and image updates.
+
+### Method A — wrapper command (recommended)
 
 ```bash
 ./openclaw pip install <skill-package>
 ```
 
-Packages are stored in a virtual environment at `/home/node/.openclaw/python-venv`, which is inside the persisted `config/` volume. They survive container recreation as long as you do not delete the volume.
+If you get `Unknown command: openclaw pip`, your wrapper is outdated. Run this once to update it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main/install.sh -o install.sh \
+  && rm openclaw \
+  && bash install.sh --wrapper-only
+```
+
+After that, `./openclaw pip install` works and future `./openclaw update` calls keep the wrapper up to date automatically.
+
+### Method B — directly inside the container
+
+```bash
+docker exec -it openclaw-openclaw-gateway-1 bash
+pip install <skill-package>
+exit
+```
 
 > **Note:** `pip install -g` does not apply to Python — just use `pip install` as shown above.
 
