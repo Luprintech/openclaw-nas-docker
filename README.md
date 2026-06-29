@@ -358,6 +358,7 @@ Exact names vary by manufacturer.
 ./openclaw message send --target <channel> --message "hi"  # Send a message
 ./openclaw agent --message "hi"  # Talk to the assistant
 ./openclaw update                # Pull repo changes, pull image, restart
+./openclaw pip install <pkg>     # Install a Python skill package (persists across restarts)
 ./openclaw status                # Container status
 ./openclaw logs                  # Follow all logs
 ./openclaw logs openclaw-gateway # Gateway logs only
@@ -379,8 +380,7 @@ Raw CLI pass-through:
 The container includes Python 3 and pip. You can install any Python-based skill directly from inside the container, and the packages **persist across restarts and updates**.
 
 ```bash
-docker exec -it openclaw-gateway bash
-pip install <skill-package>
+./openclaw pip install <skill-package>
 ```
 
 Packages are stored in a virtual environment at `/home/node/.openclaw/python-venv`, which is inside the persisted `config/` volume. They survive container recreation as long as you do not delete the volume.
