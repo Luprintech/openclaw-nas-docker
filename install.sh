@@ -706,11 +706,21 @@ cmd_update() {
     command -v git >/dev/null 2>&1 || error "git is required to update a cloned repo"
     git pull --ff-only
   else
-    printf 'No .git directory found; skipping git pull.\n' >&2
+    printf 'Downloading latest stack files from GitHub...\n'
+    local base="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
+    curl -fsSL "$base/install.sh"        -o install.sh
+    curl -fsSL "$base/docker-compose.yml" -o docker-compose.yml
+    printf 'Stack files updated.\n'
   fi
 
   compose --profile https-local pull
   compose_up
+
+  if [[ -f "install.sh" ]]; then
+    printf 'Regenerating openclaw wrapper...\n'
+    bash install.sh --wrapper-only
+    printf 'Wrapper updated.\n'
+  fi
 }
 
 openclaw_cli() {
@@ -1081,6 +1091,7 @@ print_next_steps() {
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 NAS_IP_ARG=""
+WRAPPER_ONLY=false
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -1088,6 +1099,10 @@ parse_args() {
       -h|--help)
         usage
         exit 0
+        ;;
+      --wrapper-only)
+        WRAPPER_ONLY=true
+        shift
         ;;
       --*)
         error "Unknown option: $1"
@@ -1105,6 +1120,12 @@ parse_args() {
 
 main() {
   parse_args "$@"
+
+  if [[ "$WRAPPER_ONLY" == "true" ]]; then
+    rm -f openclaw
+    write_openclaw_wrapper_if_missing
+    exit 0
+  fi
 
   local nas_ip
   nas_ip="$(detect_nas_ip "$NAS_IP_ARG")"
