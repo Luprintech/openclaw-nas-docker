@@ -29,6 +29,7 @@ services:
     init: true
     security_opt:
       - no-new-privileges:true
+      - seccomp:unconfined
     cap_drop:
       - ALL
 
