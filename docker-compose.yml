@@ -49,6 +49,11 @@ services:
       FORCE_COLOR: "1"
       CI: "false"
       OPENCLAW_SHOW_DEVICE_CODE: "true"
+      # fs-safe 0.4.5+ uses openat2 (Linux 5.6+) without a fallback.
+      # These flags force the compatible path on kernel 4.4.x (Synology).
+      # Safe on all kernels. Remove once upstream fixes openclaw/fs-safe#572.
+      OPENCLAW_FS_SAFE_NATIVE_MODE: "off"
+      FS_SAFE_NATIVE_MODE: "off"
 
     volumes:
       - ./config:/home/node/.openclaw
