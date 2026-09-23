@@ -14,9 +14,10 @@ LAST_FILE="$PROJECT_DIR/.last-openclaw-version"
 GITHUB_REPOSITORY="openclaw/openclaw"
 DRY_RUN=false
 
-# Synology kernel 4.4.x compatibility is handled via OPENCLAW_FS_SAFE_NATIVE_MODE=off
-# and FS_SAFE_NATIVE_MODE=off in docker-compose.yml — no version cap needed.
-MAX_VERSION=""
+# OpenClaw 2026.9.5 introduced openat2 (Linux 5.6+ syscall) which breaks
+# Synology NAS kernels (4.4.x). Pin to last known-good version until upstream
+# adds a fallback for older kernels.
+MAX_VERSION="2026.6.10"
 
 usage() {
   cat <<'USAGE'
