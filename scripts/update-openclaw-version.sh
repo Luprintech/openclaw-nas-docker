@@ -14,9 +14,11 @@ LAST_FILE="$PROJECT_DIR/.last-openclaw-version"
 GITHUB_REPOSITORY="openclaw/openclaw"
 DRY_RUN=false
 
-# fs-safe 0.20.0+ (shipped in OpenClaw 2026.9.8+) includes a fallback for
-# openat2 ENOSYS on kernel 4.4.x (Synology). Cap removed — auto-updates resume.
-MAX_VERSION=""
+# Synology kernel 4.4.x (DS918+, etc.) lacks the openat2 syscall (Linux 5.6+).
+# OpenClaw 2026.7+ uses @openclaw/fs-safe which calls openat2 directly and
+# crashes with ENOSYS on kernel 4.4.x.  Cap auto-updates until a kernel-safe
+# release is confirmed.
+MAX_VERSION="2026.6.10"
 
 usage() {
   cat <<'USAGE'
