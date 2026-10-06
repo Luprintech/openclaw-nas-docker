@@ -14,10 +14,9 @@ LAST_FILE="$PROJECT_DIR/.last-openclaw-version"
 GITHUB_REPOSITORY="openclaw/openclaw"
 DRY_RUN=false
 
-# OpenClaw 2026.9.5 introduced openat2 (Linux 5.6+ syscall) which breaks
-# Synology NAS kernels (4.4.x). Pin to last known-good version until upstream
-# adds a fallback for older kernels.
-MAX_VERSION="2026.6.10"
+# fs-safe 0.20.0+ (shipped in OpenClaw 2026.9.8+) includes a fallback for
+# openat2 ENOSYS on kernel 4.4.x (Synology). Cap removed — auto-updates resume.
+MAX_VERSION=""
 
 usage() {
   cat <<'USAGE'
