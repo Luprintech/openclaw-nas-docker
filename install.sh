@@ -28,6 +28,7 @@ cd "$SCRIPT_DIR"
 ENV_FILE=".env"
 CERTS_DIR="certs"
 DEFAULT_HTTPS_PORT="8443"
+RAW_BASE_URL="${OPENCLAW_RAW_BASE_URL:-https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -488,7 +489,7 @@ services:
     # HTTPS-only mode: OPENCLAW_HOST_BIND=127.0.0.1 and nginx publishes HTTPS.
     # Never expose this port through router port-forwarding.
     ports:
-      - "${OPENCLAW_HOST_BIND:?Set OPENCLAW_HOST_BIND=127.0.0.1 in .env}:18789:18789"
+      - "${OPENCLAW_HOST_BIND:?Set OPENCLAW_HOST_BIND=127.0.0.1 in .env}:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
 
     environment:
       HOME: /home/node
@@ -504,7 +505,7 @@ services:
       - ./config:/home/node/.openclaw
       - ./workspace:/home/node/.openclaw/workspace
 
-    entrypoint: []
+    entrypoint: ["/home/node/entrypoint.sh"]
     command: ["node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "lan", "--port", "18789"]
 
     healthcheck:
@@ -609,7 +610,9 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            # Rebuild this header from the socket peer. Never preserve a
+            # client-supplied X-Forwarded-For value before trusting the proxy.
+            proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-Host $http_host;
             proxy_set_header X-Forwarded-Port $server_port;
@@ -710,17 +713,21 @@ cmd_update() {
     local base="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
     curl -fsSL "$base/install.sh"        -o install.sh
     curl -fsSL "$base/docker-compose.yml" -o docker-compose.yml
+    curl -fsSL "$base/openclaw"           -o openclaw
+    chmod +x openclaw
+    mkdir -p scripts
+    curl -fsSL "$base/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
     printf 'Stack files updated.\n'
   fi
 
-  compose --profile https-local pull
-  compose_up
+  # Re-enter the freshly downloaded wrapper so an older installed wrapper
+  # still receives the migration workflow on its first update.
+  exec "$SCRIPT_DIR/openclaw" __update_after_sync "$@"
+}
 
-  if [[ -f "install.sh" ]]; then
-    printf 'Regenerating openclaw wrapper...\n'
-    bash install.sh --wrapper-only
-    printf 'Wrapper updated.\n'
-  fi
+cmd_update_after_sync() {
+  compose --profile https-local pull
+  bash scripts/migrate-openclaw.sh upgrade
 }
 
 openclaw_cli() {
@@ -736,7 +743,13 @@ cmd_dashboard() {
 }
 
 cmd_devices() {
-  openclaw_cli devices list "$@"
+  local subcommand="${1:-list}"
+  if [[ "$subcommand" == "approve" ]]; then
+    shift
+    cmd_approve "$@"
+  else
+    openclaw_cli devices list "$@"
+  fi
 }
 
 cmd_approve() {
@@ -767,6 +780,7 @@ main() {
     message) openclaw_cli message "$@" ;;
     agent) openclaw_cli agent "$@" ;;
     update) cmd_update "$@" ;;
+    __update_after_sync) cmd_update_after_sync "$@" ;;
     pip) cmd_pip "$@" ;;
     start|up) compose_up "$@" ;;
     stop|down) compose down "$@" ;;
@@ -890,6 +904,7 @@ TZ=
 OPENCLAW_GATEWAY_TOKEN=
 NAS_IP=
 OPENCLAW_HOST_BIND=
+OPENCLAW_GATEWAY_PORT=
 OPENCLAW_PROXY_BIND=
 OPENCLAW_HTTPS_PORT=
 OPENCLAW_HTTPS_MODE=
@@ -946,6 +961,22 @@ ENV_EOF
   success "Configured HTTPS-only local access"
   success "OpenClaw raw gateway bound to 127.0.0.1:18789"
   success "Nginx HTTPS proxy bound to $nas_ip:$https_port"
+}
+
+repair_runtime_ownership() {
+  section "Repairing OpenClaw runtime ownership"
+
+  # Synology SSH users may not be able to chown a bind mount. Use the Docker
+  # daemon with only the capabilities needed for this one-off ownership repair.
+  if docker compose run --rm --no-deps --user 0 \
+    --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add DAC_READ_SEARCH \
+    --cap-add FOWNER \
+    --entrypoint sh openclaw-gateway -lc \
+    'chown -R 1000:1000 /home/node/.openclaw && chmod -R u+rwX /home/node/.openclaw' >/dev/null; then
+    success "Adjusted OpenClaw runtime ownership through Docker"
+  else
+    error "Could not adjust OpenClaw runtime ownership through Docker"
+  fi
 }
 
 pre_configure_gateway() {
@@ -1007,10 +1038,12 @@ configure_gateway() {
   docker compose exec -T openclaw-gateway \
     sh -c 'timeout 15 node dist/index.js plugins disable bonjour 2>/dev/null' || true
 
-  docker compose exec -T openclaw-gateway \
-    node dist/index.js config set gateway.controlUi.allowedOrigins "${allowed_origins}" && \
-    success "Applied allowed origins: ${allowed_origins}" || \
+  if docker compose exec -T openclaw-gateway \
+    node dist/index.js config set gateway.controlUi.allowedOrigins "${allowed_origins}"; then
+    success "Applied allowed origins: ${allowed_origins}"
+  else
     warn "Could not apply allowed origins"
+  fi
 
   docker compose exec -T openclaw-gateway \
     sh -c 'timeout 10 node dist/index.js config set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback false' || true
@@ -1045,6 +1078,19 @@ configure_gateway() {
     sleep 10
     success "Gateway restarted with forced configuration"
   fi
+}
+
+ensure_migration_helper() {
+  mkdir -p scripts
+  if [[ -f "scripts/migrate-openclaw.sh" ]]; then
+    chmod +x scripts/migrate-openclaw.sh
+    return
+  fi
+
+  section "Installing NAS migration helper"
+  curl -fsSL "$RAW_BASE_URL/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
+  chmod +x scripts/migrate-openclaw.sh
+  success "Installed migration helper"
 }
 
 print_next_steps() {
@@ -1138,9 +1184,11 @@ main() {
 
   generate_files_if_missing
   check_tools
+  ensure_migration_helper
   check_legacy_containers
   prepare_runtime_dirs
   prepare_env "$nas_ip"
+  repair_runtime_ownership
   generate_https_certs_if_needed "$nas_ip"
   validate_env_inline
 
@@ -1151,6 +1199,7 @@ main() {
   pre_configure_gateway "$nas_ip" "$https_port"
   start_stack
   configure_gateway "$nas_ip" "$https_port"
+  bash scripts/migrate-openclaw.sh configure-proxy
 
   print_next_steps "$nas_ip"
 }

@@ -78,12 +78,20 @@ cmd_update() {
     local base_url="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
     curl -fsSL "$base_url/docker-compose.yml" -o docker-compose.yml
     curl -fsSL "$base_url/openclaw"           -o openclaw
+    mkdir -p scripts
+    curl -fsSL "$base_url/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
     chmod +x openclaw
     printf 'Stack files updated.\n'
   fi
 
+  # Re-enter the freshly downloaded wrapper so an older installed wrapper
+  # still receives the migration workflow on its first update.
+  exec "$SCRIPT_DIR/openclaw" __update_after_sync "$@"
+}
+
+cmd_update_after_sync() {
   compose --profile https-local pull
-  compose_up
+  bash scripts/migrate-openclaw.sh upgrade
 }
 
 openclaw_cli() {
@@ -99,7 +107,13 @@ cmd_dashboard() {
 }
 
 cmd_devices() {
-  openclaw_cli devices list "$@"
+  local subcommand="${1:-list}"
+  if [[ "$subcommand" == "approve" ]]; then
+    shift
+    cmd_approve "$@"
+  else
+    openclaw_cli devices list "$@"
+  fi
 }
 
 cmd_approve() {
@@ -127,6 +141,7 @@ main() {
     agent) openclaw_cli agent "$@" ;;
     update-version) scripts/update-openclaw-version.sh "$@" ;;
     update) cmd_update "$@" ;;
+    __update_after_sync) cmd_update_after_sync "$@" ;;
     start|up) compose_up "$@" ;;
     stop|down) compose down "$@" ;;
     restart) compose_restart "$@" ;;
