@@ -28,7 +28,7 @@ cd "$SCRIPT_DIR"
 ENV_FILE=".env"
 CERTS_DIR="certs"
 DEFAULT_HTTPS_PORT="8443"
-RAW_BASE_URL="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
+RAW_BASE_URL="${OPENCLAW_RAW_BASE_URL:-https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
