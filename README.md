@@ -409,6 +409,17 @@ exit
 
 ## Updating OpenClaw
 
+> [!IMPORTANT]
+> **Installed OpenClaw before the Synology 2026.9.9 compatibility update?** Refresh the local `./openclaw` wrapper **once** before your first update. This safely upgrades the wrapper; it does not delete your configuration, workspace, or sessions:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main/install.sh -o install.sh \
+>   && rm -f openclaw \
+>   && bash install.sh --wrapper-only
+> ```
+>
+> Then run `./openclaw update`. After that one-time migration, use only `./openclaw update` for all future updates.
+
 Recommended update path on the NAS:
 
 ```bash
