@@ -66,8 +66,29 @@ configure_gateway_proxy() {
   [[ "$proxy_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || error "Could not determine Nginx container IP"
 
   compose run --rm --no-deps -e "OPENCLAW_PROXY_IP=$proxy_ip" --entrypoint node openclaw-gateway -e \
-    'const fs=require("fs");const p="/home/node/.openclaw/openclaw.json";const c=JSON.parse(fs.readFileSync(p,"utf8"));c.gateway=c.gateway||{};c.gateway.trustedProxies=[process.env.OPENCLAW_PROXY_IP];if(c.meta&&Object.hasOwn(c.meta,"lastTouchedAt"))delete c.meta.lastTouchedAt;fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");console.log("trustedProxies:",JSON.stringify(c.gateway.trustedProxies));' \
+    'const fs=require("fs");const p="/home/node/.openclaw/openclaw.json";const c=JSON.parse(fs.readFileSync(p,"utf8"));c.gateway=c.gateway||{};c.gateway.trustedProxies=[process.env.OPENCLAW_PROXY_IP];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");console.log("trustedProxies:",JSON.stringify(c.gateway.trustedProxies));' \
     OPENCLAW_PROXY_IP="$proxy_ip"
+}
+
+normalize_legacy_config() {
+  compose run --rm --no-deps --entrypoint node openclaw-gateway -e '
+    const fs = require("fs");
+    const path = "/home/node/.openclaw/openclaw.json";
+    const config = JSON.parse(fs.readFileSync(path, "utf8"));
+    const removed = [];
+    const remove = (object, key, label) => {
+      if (object && Object.hasOwn(object, key)) {
+        delete object[key];
+        removed.push(label);
+      }
+    };
+    remove(config.meta, "lastTouchedAt", "meta.lastTouchedAt");
+    remove(config.gateway && config.gateway.controlUi, "allowInsecureAuth", "gateway.controlUi.allowInsecureAuth");
+    remove(config.gateway && config.gateway.tailscale, "resetOnExit", "gateway.tailscale.resetOnExit");
+    remove(config.gateway && config.gateway.nodes, "denyCommands", "gateway.nodes.denyCommands");
+    fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\\n");
+    console.log("Removed legacy config keys:", removed.length ? removed.join(", ") : "none");
+  '
 }
 
 run_migrations() {
@@ -79,6 +100,7 @@ run_migrations() {
   printf 'Backup created: %s\n' "$backup_dir"
 
   compose stop openclaw-gateway >/dev/null
+  normalize_legacy_config
 
   # --fix performs the general state migrations.  On NAS bind mounts it may
   # report EPERM from fchmod after committing some migrations; the dedicated
