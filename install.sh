@@ -970,6 +970,7 @@ repair_runtime_ownership() {
   # daemon with only the capabilities needed for this one-off ownership repair.
   if docker compose run --rm --no-deps --user 0 \
     --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add DAC_READ_SEARCH \
+    --cap-add FOWNER \
     --entrypoint sh openclaw-gateway -lc \
     'chown -R 1000:1000 /home/node/.openclaw && chmod -R u+rwX /home/node/.openclaw' >/dev/null; then
     success "Adjusted OpenClaw runtime ownership through Docker"
