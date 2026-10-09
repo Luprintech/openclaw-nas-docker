@@ -74,7 +74,12 @@ normalize_legacy_config() {
   compose run --rm --no-deps --entrypoint node openclaw-gateway -e '
     const fs = require("fs");
     const path = "/home/node/.openclaw/openclaw.json";
-    const config = JSON.parse(fs.readFileSync(path, "utf8"));
+    let raw = fs.readFileSync(path, "utf8");
+    const literalBackslashNewline = String.raw`\n`;
+    const trimmed = raw.trimEnd();
+    const repairedTrailingLiteral = trimmed.endsWith(literalBackslashNewline);
+    if (repairedTrailingLiteral) raw = trimmed.slice(0, -literalBackslashNewline.length) + "\n";
+    const config = JSON.parse(raw);
     const removed = [];
     const remove = (object, key, label) => {
       if (object && Object.hasOwn(object, key)) {
@@ -87,6 +92,7 @@ normalize_legacy_config() {
     remove(config.gateway && config.gateway.tailscale, "resetOnExit", "gateway.tailscale.resetOnExit");
     remove(config.gateway && config.gateway.nodes, "denyCommands", "gateway.nodes.denyCommands");
     fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+    if (repairedTrailingLiteral) console.log("Repaired a trailing literal backslash-n sequence.");
     console.log("Removed legacy config keys:", removed.length ? removed.join(", ") : "none");
   '
 }
