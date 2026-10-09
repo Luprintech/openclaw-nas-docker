@@ -73,13 +73,14 @@ configure_gateway_proxy() {
 normalize_legacy_config() {
   compose run --rm --no-deps --entrypoint node openclaw-gateway -e '
     const fs = require("fs");
+    const JSON5 = require("json5");
     const path = "/home/node/.openclaw/openclaw.json";
     let raw = fs.readFileSync(path, "utf8");
     const literalBackslashNewline = String.raw`\n`;
     const trimmed = raw.trimEnd();
     const repairedTrailingLiteral = trimmed.endsWith(literalBackslashNewline);
     if (repairedTrailingLiteral) raw = trimmed.slice(0, -literalBackslashNewline.length) + "\n";
-    const config = JSON.parse(raw);
+    const config = JSON5.parse(raw);
     const removed = [];
     const remove = (object, key, label) => {
       if (object && Object.hasOwn(object, key)) {
