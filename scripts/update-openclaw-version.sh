@@ -13,22 +13,25 @@ LAST_FILE="$PROJECT_DIR/.last-openclaw-version"
 
 GITHUB_REPOSITORY="openclaw/openclaw"
 DRY_RUN=false
+PROPOSE=false
 
 # Synology kernel 4.4.x (DS220+, DS918+, etc.) lacks the openat2 syscall (Linux 5.6+).
 # Older OpenClaw releases using early @openclaw/fs-safe versions could fail on
-# those kernels during startup or state migration. Keep auto-updates capped to a
-# version explicitly reviewed for Synology before allowing CI to publish it.
+# those kernels during startup or state migration. Keep direct/manual updates
+# capped to a version explicitly reviewed for Synology. CI proposal mode can
+# prepare a newer version in a PR so it can be tested before publication.
 # OpenClaw 2026.9.9 bundles @openclaw/fs-safe 0.21.1 and is the current
 # controlled Synology test target for this repository.
 MAX_VERSION="2026.9.9"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/update-openclaw-version.sh [--dry-run]
+Usage: scripts/update-openclaw-version.sh [--dry-run] [--propose]
 
 Fetches official OpenClaw image tags from GHCR, picks the newest stable
 date-based Docker tag, and updates .last-openclaw-version.
 
+--propose allows CI to prepare a newer candidate without publishing it.
 It does not run docker compose build/up/pull.
 USAGE
 }
@@ -47,6 +50,10 @@ parse_args() {
     case "$1" in
       --dry-run)
         DRY_RUN=true
+        shift
+        ;;
+      --propose)
+        PROPOSE=true
         shift
         ;;
       -h|--help)
@@ -128,11 +135,20 @@ main() {
   printf 'Current OpenClaw version: %s\n' "${current:-unknown}"
   printf 'Latest OpenClaw version:  %s\n' "$latest"
 
-  # Guard: do not advance past MAX_VERSION until kernel compatibility is verified.
-  if [[ -n "$MAX_VERSION" ]] && [[ "$latest" > "$MAX_VERSION" ]]; then
-    printf 'Latest version %s exceeds MAX_VERSION cap %s — keeping %s.\n' \
-      "$latest" "$MAX_VERSION" "$MAX_VERSION" >&2
-    latest="$MAX_VERSION"
+  # Guard direct/manual updates. Proposal mode deliberately bypasses this
+  # guard because the resulting branch must be tested and approved before it
+  # can reach main or trigger image publication.
+  if [[ "$PROPOSE" != "true" && -n "$MAX_VERSION" ]]; then
+    if [[ "$latest" > "$MAX_VERSION" ]]; then
+      printf 'Latest version %s exceeds MAX_VERSION cap %s — keeping %s.\n' \
+        "$latest" "$MAX_VERSION" "$MAX_VERSION" >&2
+      latest="$MAX_VERSION"
+    fi
+    if [[ -n "$current" && "$current" > "$MAX_VERSION" && "$latest" < "$current" ]]; then
+      printf 'Current approved version %s is above MAX_VERSION cap %s — keeping %s.\n' \
+        "$current" "$MAX_VERSION" "$current" >&2
+      latest="$current"
+    fi
   fi
 
   if [[ "$current" == "$latest" ]]; then
