@@ -704,6 +704,44 @@ compose_restart() {
   compose --profile https-local restart "$@"
 }
 
+normalize_legacy_image_override() {
+  local current version replacement backup_file temp_file
+
+  [[ -f ".env" ]] || return 0
+
+  current="$(sed -n 's/^OPENCLAW_IMAGE=//p' .env | head -n 1 | tr -d '\r')"
+  case "$current" in
+    openclaw-nas-docker:synology-*)
+      version="${current#openclaw-nas-docker:synology-}"
+      ;;
+    openclaw-nas-docker:202*)
+      version="${current#openclaw-nas-docker:}"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  [[ "$version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]] || return 0
+
+  replacement="ghcr.io/luprintech/openclaw-nas-docker:${version}"
+  backup_file=".env.before-image-migration.$(date +%Y%m%d-%H%M%S)"
+  temp_file=".env.tmp.$$"
+  cp -p .env "$backup_file"
+  awk -v replacement="$replacement" '
+    BEGIN { replaced = 0 }
+    /^OPENCLAW_IMAGE=/ && !replaced {
+      print "OPENCLAW_IMAGE=" replacement
+      replaced = 1
+      next
+    }
+    { print }
+  ' .env > "$temp_file"
+  mv "$temp_file" .env
+  printf 'Migrated legacy local image override to %s (backup: %s).\n' \
+    "$replacement" "$backup_file"
+}
+
 cmd_update() {
   if [[ -d ".git" ]]; then
     command -v git >/dev/null 2>&1 || error "git is required to update a cloned repo"
@@ -726,6 +764,7 @@ cmd_update() {
 }
 
 cmd_update_after_sync() {
+  normalize_legacy_image_override
   compose --profile https-local pull
   bash scripts/migrate-openclaw.sh upgrade
 }
