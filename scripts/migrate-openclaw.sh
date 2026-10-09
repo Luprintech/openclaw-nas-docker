@@ -117,7 +117,8 @@ run_migrations() {
     warn "General doctor repair reported an error; continuing with session import."
 
   compose run --rm --no-deps openclaw-gateway \
-    openclaw doctor --session-sqlite import --session-sqlite-all-agents --non-interactive
+    openclaw doctor --session-sqlite import --session-sqlite-all-agents --non-interactive || \
+    warn "Session SQLite import reported an error; continuing with gateway startup."
 }
 
 wait_for_gateway() {
