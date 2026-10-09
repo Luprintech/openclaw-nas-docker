@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+#
+# Safe OpenClaw maintenance for NAS bind mounts.
+#
+# OpenClaw state is owned by UID 1000 inside the container.  NAS users can
+# therefore be unable to copy or rewrite config files directly over SSH.  This
+# helper performs backups and migrations through Docker, which has access to
+# the bind mount through the daemon.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
+
+BACKUP_ROOT="${OPENCLAW_BACKUP_ROOT:-$PROJECT_DIR}"
+
+error() {
+  printf 'ERROR: %s\n' "$1" >&2
+  exit 1
+}
+
+warn() {
+  printf 'WARN: %s\n' "$1" >&2
+}
+
+compose() {
+  docker compose --profile https-local "$@"
+}
+
+gateway_container() {
+  compose ps -q openclaw-gateway
+}
+
+nginx_container() {
+  compose ps -q nginx
+}
+
+backup_state() {
+  local container="$1"
+  local stamp backup_dir
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  backup_dir="$BACKUP_ROOT/openclaw-backup-$stamp"
+  mkdir -p "$backup_dir"
+
+  cp -a .env docker-compose.yml nginx "$backup_dir/" 2>/dev/null || true
+  docker cp "$container:/home/node/.openclaw" "$backup_dir/openclaw-home" >/dev/null
+  printf '%s\n' "$backup_dir"
+}
+
+patch_nginx_forwarded_headers() {
+  local nginx_file="nginx/nginx.conf"
+  [[ -f "$nginx_file" ]] || error "Missing $nginx_file"
+
+  if grep -q 'proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' "$nginx_file"; then
+    sed -i 's|proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;|proxy_set_header X-Forwarded-For \$remote_addr;|' "$nginx_file"
+    printf 'Updated Nginx to overwrite X-Forwarded-For safely.\n'
+  fi
+}
+
+configure_gateway_proxy() {
+  local container proxy_ip
+  container="$(nginx_container)"
+  [[ -n "$container" ]] || error "Nginx container is not running"
+  proxy_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container")"
+  [[ "$proxy_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || error "Could not determine Nginx container IP"
+
+  compose run --rm --no-deps -e "OPENCLAW_PROXY_IP=$proxy_ip" --entrypoint node openclaw-gateway -e \
+    'const fs=require("fs");const p="/home/node/.openclaw/openclaw.json";const c=JSON.parse(fs.readFileSync(p,"utf8"));c.gateway=c.gateway||{};c.gateway.trustedProxies=[process.env.OPENCLAW_PROXY_IP];if(c.meta&&Object.hasOwn(c.meta,"lastTouchedAt"))delete c.meta.lastTouchedAt;fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");console.log("trustedProxies:",JSON.stringify(c.gateway.trustedProxies));' \
+    OPENCLAW_PROXY_IP="$proxy_ip"
+}
+
+run_migrations() {
+  local container backup_dir
+  container="$(gateway_container)"
+  [[ -n "$container" ]] || error "OpenClaw gateway container is not available for backup"
+
+  backup_dir="$(backup_state "$container")"
+  printf 'Backup created: %s\n' "$backup_dir"
+
+  compose stop openclaw-gateway >/dev/null
+
+  # --fix performs the general state migrations.  On NAS bind mounts it may
+  # report EPERM from fchmod after committing some migrations; the dedicated
+  # session import below is still required and has its own validation output.
+  compose run --rm --no-deps openclaw-gateway openclaw doctor --fix || \
+    warn "General doctor repair reported an error; continuing with session import."
+
+  compose run --rm --no-deps openclaw-gateway \
+    openclaw doctor --session-sqlite import --session-sqlite-all-agents --non-interactive
+}
+
+wait_for_gateway() {
+  local i=0
+  until compose exec -T openclaw-gateway curl -fsS http://127.0.0.1:18789/healthz >/dev/null 2>&1; do
+    i=$((i + 1))
+    [[ "$i" -lt 60 ]] || error "Gateway did not become healthy. Check: docker compose logs openclaw-gateway"
+    sleep 2
+  done
+}
+
+configure_proxy() {
+  patch_nginx_forwarded_headers
+  compose stop openclaw-gateway >/dev/null || true
+  configure_gateway_proxy
+  compose up -d openclaw-gateway >/dev/null
+  wait_for_gateway
+  compose restart nginx >/dev/null
+}
+
+upgrade() {
+  local container
+  container="$(gateway_container)"
+  [[ -n "$container" ]] || error "OpenClaw gateway container is not running; start the stack before updating."
+
+  run_migrations
+  configure_proxy
+  printf 'OpenClaw maintenance completed. Verify with: docker compose ps\n'
+}
+
+case "${1:-upgrade}" in
+  configure-proxy)
+    configure_proxy
+    ;;
+  upgrade)
+    upgrade
+    ;;
+  *)
+    error "Usage: scripts/migrate-openclaw.sh {upgrade|configure-proxy}"
+    ;;
+esac
