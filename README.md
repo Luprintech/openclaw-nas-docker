@@ -168,6 +168,10 @@ The installer handles everything automatically:
 
 After install, add your AI provider key(s) to `.env`.
 
+> **Important:** a ChatGPT or Codex subscription is not an OpenAI API key.
+> For OpenAI models, configure an API key with available API billing/quota, or
+> choose another supported provider or a local model service.
+
 **Option A — via SSH (Synology doesn't include `nano`, use `vi`):**
 
 ```bash
@@ -238,6 +242,15 @@ OPENCLAW_GATEWAY_TOKEN=your-token-here
 
 Do not paste the key name. Paste only the token value.
 
+If you prefer not to open `.env`, the wrapper can display the configured token:
+
+```bash
+./openclaw gateway auth-token --show
+```
+
+Treat the output as a password. Never paste it into a public issue, pull
+request, screenshot, or chat.
+
 ### 5. Run onboarding
 
 From the NAS project directory:
@@ -273,14 +286,16 @@ Then:
 6. Approve it:
 
 ```bash
-./openclaw approve <request_id>
+./openclaw devices approve <request_id>
 ```
 
 Example:
 
 ```bash
-./openclaw approve abc123
+./openclaw devices approve abc123
 ```
+
+The shorter `./openclaw approve <request_id>` form is also supported.
 
 7. Refresh the browser dashboard.
 
@@ -352,7 +367,8 @@ Exact names vary by manufacturer.
 ./openclaw onboard               # First-time setup
 ./openclaw dashboard             # Print dashboard / pairing URL
 ./openclaw devices               # List devices
-./openclaw approve <request_id>  # Approve a device
+./openclaw devices approve <request_id> # Approve a device
+./openclaw gateway auth-token --show    # Display the gateway token
 ./openclaw doctor                # Run diagnostics
 ./openclaw claude                # Open Claude Code interactive TUI
 ./openclaw message send --target <channel> --message "hi"  # Send a message
