@@ -440,9 +440,13 @@ names are left untouched.
 
 The migration is deliberately performed through Docker rather than by copying
 `config/` as the SSH user. Synology permissions can prevent the SSH user from
-reading files owned by UID 1000 inside the container. The helper also runs the
-dedicated session SQLite import required by recent OpenClaw releases; a plain
-`openclaw doctor --fix` is not sufficient for every non-interactive upgrade.
+reading files owned by UID 1000 inside the container. During each controlled
+update, the helper also restores ownership of the persisted OpenClaw state to
+UID/GID 1000 before migration. This repairs files left by older releases and
+lets the gateway install plugins without a separate manual permission repair.
+The helper also runs the dedicated session SQLite import required by recent
+OpenClaw releases; a plain `openclaw doctor --fix` is not sufficient for every
+non-interactive upgrade.
 
 During a clean installation, the installer repairs the ownership of `config/`
 and `workspace/` through a one-off Docker container because the Synology SSH
