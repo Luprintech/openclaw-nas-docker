@@ -3,7 +3,7 @@
 # OpenClaw Docker command wrapper.
 #
 # Use this instead of:
-#   docker compose exec openclaw-cli node dist/index.js ...
+#   docker compose exec openclaw-gateway node dist/index.js ...
 
 set -euo pipefail
 
@@ -26,6 +26,7 @@ OpenClaw:
   agent <args>          Talk to the assistant (e.g. agent --message "hi")
   update-version        Update local OpenClaw image version pins
   update                Pull repo changes, pull image, restart stack
+  pip <args>            Run pip inside the gateway container (e.g. pip install requests)
 
 Stack:
   start                 Start Docker Compose stack
@@ -113,12 +114,13 @@ cmd_update() {
     git pull --ff-only
   else
     printf 'Downloading latest stack files from GitHub...\n'
-    local base_url="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
-    curl -fsSL "$base_url/docker-compose.yml" -o docker-compose.yml
-    curl -fsSL "$base_url/openclaw"           -o openclaw
-    mkdir -p scripts
-    curl -fsSL "$base_url/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
+    local base="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
+    curl -fsSL "$base/install.sh"        -o install.sh
+    curl -fsSL "$base/docker-compose.yml" -o docker-compose.yml
+    curl -fsSL "$base/openclaw"           -o openclaw
     chmod +x openclaw
+    mkdir -p scripts
+    curl -fsSL "$base/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
     printf 'Stack files updated.\n'
   fi
 
@@ -165,6 +167,10 @@ cmd_claude() {
   compose --profile cli run --rm -it openclaw-cli claude "$@"
 }
 
+cmd_pip() {
+  compose exec openclaw-gateway pip "$@"
+}
+
 main() {
   local command="${1:-help}"
   [[ $# -gt 0 ]] && shift || true
@@ -181,6 +187,7 @@ main() {
     update-version) scripts/update-openclaw-version.sh "$@" ;;
     update) cmd_update "$@" ;;
     __update_after_sync) cmd_update_after_sync "$@" ;;
+    pip) cmd_pip "$@" ;;
     start|up) compose_up "$@" ;;
     stop|down) compose down "$@" ;;
     restart) compose_restart "$@" ;;
