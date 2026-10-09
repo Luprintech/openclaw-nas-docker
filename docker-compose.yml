@@ -38,7 +38,7 @@ services:
     # HTTPS-only mode: OPENCLAW_HOST_BIND=127.0.0.1 and nginx publishes HTTPS.
     # Never expose this port through router port-forwarding.
     ports:
-      - "${OPENCLAW_HOST_BIND:?Set OPENCLAW_HOST_BIND=127.0.0.1 in .env}:18789:18789"
+      - "${OPENCLAW_HOST_BIND:?Set OPENCLAW_HOST_BIND=127.0.0.1 in .env}:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
 
     environment:
       HOME: /home/node
