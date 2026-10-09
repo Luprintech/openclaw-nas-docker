@@ -14,11 +14,13 @@ LAST_FILE="$PROJECT_DIR/.last-openclaw-version"
 GITHUB_REPOSITORY="openclaw/openclaw"
 DRY_RUN=false
 
-# Synology kernel 4.4.x (DS918+, etc.) lacks the openat2 syscall (Linux 5.6+).
-# OpenClaw 2026.7+ uses @openclaw/fs-safe which calls openat2 directly and
-# crashes with ENOSYS on kernel 4.4.x.  Cap auto-updates until a kernel-safe
-# release is confirmed.
-MAX_VERSION="2026.6.10"
+# Synology kernel 4.4.x (DS220+, DS918+, etc.) lacks the openat2 syscall (Linux 5.6+).
+# Older OpenClaw releases using early @openclaw/fs-safe versions could fail on
+# those kernels during startup or state migration. Keep auto-updates capped to a
+# version explicitly reviewed for Synology before allowing CI to publish it.
+# OpenClaw 2026.9.9 bundles @openclaw/fs-safe 0.21.1 and is the current
+# controlled Synology test target for this repository.
+MAX_VERSION="2026.9.9"
 
 usage() {
   cat <<'USAGE'
@@ -73,7 +75,8 @@ fetch_latest_version() {
     curl -fsSL --max-time 15 \
       -H "Accept: application/vnd.github+json" \
       "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" |
-      jq -r '.tag_name // empty'
+      sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' |
+      head -n 1
   )"
   [[ -n "$tag" ]] || error "Could not fetch latest release from GitHub (check network connectivity)."
 
@@ -85,7 +88,8 @@ fetch_latest_version() {
   docker_token="$(
     curl -fsSL --max-time 10 \
       "https://ghcr.io/token?scope=repository:openclaw/openclaw:pull" |
-      jq -r '.token // empty'
+      sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' |
+      head -n 1
   )"
   if [[ -n "$docker_token" ]]; then
     http_code="$(
@@ -114,7 +118,7 @@ apply_version() {
 main() {
   parse_args "$@"
   need_command curl
-  need_command jq
+  need_command sed
 
   local current latest
   current="$(read_current_version)"
