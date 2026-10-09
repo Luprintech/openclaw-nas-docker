@@ -743,7 +743,13 @@ cmd_dashboard() {
 }
 
 cmd_devices() {
-  openclaw_cli devices list "$@"
+  local subcommand="${1:-list}"
+  if [[ "$subcommand" == "approve" ]]; then
+    shift
+    cmd_approve "$@"
+  else
+    openclaw_cli devices list "$@"
+  fi
 }
 
 cmd_approve() {
