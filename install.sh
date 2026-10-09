@@ -957,6 +957,20 @@ ENV_EOF
   success "Nginx HTTPS proxy bound to $nas_ip:$https_port"
 }
 
+repair_runtime_ownership() {
+  section "Repairing OpenClaw runtime ownership"
+
+  # Synology SSH users may not be able to chown a bind mount. Use the Docker
+  # daemon with only CAP_CHOWN restored for this one-off ownership repair.
+  if docker compose run --rm --no-deps --user 0 --cap-add CHOWN \
+    --entrypoint sh openclaw-gateway -lc \
+    'chown -R 1000:1000 /home/node/.openclaw && chmod -R u+rwX /home/node/.openclaw' >/dev/null; then
+    success "Adjusted OpenClaw runtime ownership through Docker"
+  else
+    error "Could not adjust OpenClaw runtime ownership through Docker"
+  fi
+}
+
 pre_configure_gateway() {
   local nas_ip="$1"
   local https_port="$2"
@@ -1164,6 +1178,7 @@ main() {
   check_legacy_containers
   prepare_runtime_dirs
   prepare_env "$nas_ip"
+  repair_runtime_ownership
   generate_https_certs_if_needed "$nas_ip"
   validate_env_inline
 

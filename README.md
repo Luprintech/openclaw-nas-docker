@@ -427,6 +427,10 @@ reading files owned by UID 1000 inside the container. The helper also runs the
 dedicated session SQLite import required by recent OpenClaw releases; a plain
 `openclaw doctor --fix` is not sufficient for every non-interactive upgrade.
 
+During a clean installation, the installer repairs the ownership of `config/`
+and `workspace/` through a one-off Docker container because the Synology SSH
+user may not have permission to run `chown` on those bind mounts.
+
 On Synology, `openclaw doctor --fix` can report
 `EPERM: operation not permitted, fchmod` after applying migrations. Treat this
 as non-fatal only when the helper completes, the gateway log contains
