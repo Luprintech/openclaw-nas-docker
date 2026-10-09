@@ -29,7 +29,7 @@ compose() {
 }
 
 gateway_container() {
-  compose ps -q openclaw-gateway
+  compose ps -aq openclaw-gateway
 }
 
 nginx_container() {
