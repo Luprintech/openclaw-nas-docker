@@ -86,7 +86,7 @@ normalize_legacy_config() {
     remove(config.gateway && config.gateway.controlUi, "allowInsecureAuth", "gateway.controlUi.allowInsecureAuth");
     remove(config.gateway && config.gateway.tailscale, "resetOnExit", "gateway.tailscale.resetOnExit");
     remove(config.gateway && config.gateway.nodes, "denyCommands", "gateway.nodes.denyCommands");
-    fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\\n");
+    fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
     console.log("Removed legacy config keys:", removed.length ? removed.join(", ") : "none");
   '
 }
