@@ -71,6 +71,7 @@ configure_gateway_proxy() {
 }
 
 normalize_legacy_config() {
+  # shellcheck disable=SC2016 # Node code is intentionally passed as a literal argument.
   compose run --rm --no-deps --entrypoint node openclaw-gateway -e '
     const fs = require("fs");
     const JSON5 = require("json5");
