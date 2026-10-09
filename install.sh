@@ -659,7 +659,8 @@ OpenClaw:
   claude                Open Claude Code interactive TUI
   message <args>        Send a message (e.g. message send --target foo --message "hi")
   agent <args>          Talk to the assistant (e.g. agent --message "hi")
-  update                Pull latest image and restart stack
+  update-version        Update local OpenClaw image version pins
+  update                Pull repo changes, pull image, restart stack
   pip <args>            Run pip inside the gateway container (e.g. pip install requests)
 
 Stack:
@@ -818,6 +819,7 @@ main() {
     claude) cmd_claude "$@" ;;
     message) openclaw_cli message "$@" ;;
     agent) openclaw_cli agent "$@" ;;
+    update-version) scripts/update-openclaw-version.sh "$@" ;;
     update) cmd_update "$@" ;;
     __update_after_sync) cmd_update_after_sync "$@" ;;
     pip) cmd_pip "$@" ;;
