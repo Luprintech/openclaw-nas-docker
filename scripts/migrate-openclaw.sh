@@ -70,6 +70,21 @@ configure_gateway_proxy() {
     OPENCLAW_PROXY_IP="$proxy_ip"
 }
 
+repair_runtime_ownership() {
+  # Older releases could leave persisted files owned by root. Restore the
+  # runtime tree to the unprivileged node user so plugin installation can
+  # safely apply its final file modes.
+  if compose run --rm --no-deps --user 0 \
+    --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add DAC_READ_SEARCH \
+    --cap-add FOWNER \
+    --entrypoint sh openclaw-gateway -lc \
+    'chown -R 1000:1000 /home/node/.openclaw && chmod -R u+rwX /home/node/.openclaw' >/dev/null; then
+    printf 'Repaired OpenClaw runtime ownership.\n'
+  else
+    error 'Could not repair OpenClaw runtime ownership; no migrations were applied.'
+  fi
+}
+
 normalize_legacy_config() {
   # shellcheck disable=SC2016 # Node code is intentionally passed as a literal argument.
   compose run --rm --no-deps --entrypoint node openclaw-gateway -e '
@@ -108,6 +123,7 @@ run_migrations() {
   printf 'Backup created: %s\n' "$backup_dir"
 
   compose stop openclaw-gateway >/dev/null
+  repair_runtime_ownership
   normalize_legacy_config
 
   # --fix performs the general state migrations.  On NAS bind mounts it may
