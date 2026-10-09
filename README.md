@@ -427,6 +427,12 @@ reading files owned by UID 1000 inside the container. The helper also runs the
 dedicated session SQLite import required by recent OpenClaw releases; a plain
 `openclaw doctor --fix` is not sufficient for every non-interactive upgrade.
 
+On Synology, `openclaw doctor --fix` can report
+`EPERM: operation not permitted, fchmod` after applying migrations. Treat this
+as non-fatal only when the helper completes, the gateway log contains
+`gateway ready`, and `docker compose ps` reports the gateway as `healthy`.
+Otherwise stop and inspect the backup and logs before retrying.
+
 If an upgrade reports a failure, do not repeatedly restart the gateway. Keep
 the printed backup directory and inspect:
 
