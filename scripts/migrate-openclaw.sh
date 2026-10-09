@@ -52,8 +52,8 @@ patch_nginx_forwarded_headers() {
   local nginx_file="nginx/nginx.conf"
   [[ -f "$nginx_file" ]] || error "Missing $nginx_file"
 
-  if grep -q 'proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' "$nginx_file"; then
-    sed -i 's|proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;|proxy_set_header X-Forwarded-For \$remote_addr;|' "$nginx_file"
+  if grep -q "proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;" "$nginx_file"; then
+    sed -i "s|proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;|proxy_set_header X-Forwarded-For \$remote_addr;|" "$nginx_file"
     printf 'Updated Nginx to overwrite X-Forwarded-For safely.\n'
   fi
 }

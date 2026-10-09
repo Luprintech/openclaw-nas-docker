@@ -1038,10 +1038,12 @@ configure_gateway() {
   docker compose exec -T openclaw-gateway \
     sh -c 'timeout 15 node dist/index.js plugins disable bonjour 2>/dev/null' || true
 
-  docker compose exec -T openclaw-gateway \
-    node dist/index.js config set gateway.controlUi.allowedOrigins "${allowed_origins}" && \
-    success "Applied allowed origins: ${allowed_origins}" || \
+  if docker compose exec -T openclaw-gateway \
+    node dist/index.js config set gateway.controlUi.allowedOrigins "${allowed_origins}"; then
+    success "Applied allowed origins: ${allowed_origins}"
+  else
     warn "Could not apply allowed origins"
+  fi
 
   docker compose exec -T openclaw-gateway \
     sh -c 'timeout 10 node dist/index.js config set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback false' || true
