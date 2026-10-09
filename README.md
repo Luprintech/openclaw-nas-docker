@@ -426,6 +426,17 @@ Manual version pin update, usually only needed by maintainers:
 ./openclaw update-version
 ```
 
+### Synology compatibility test target
+
+This repository currently caps automated OpenClaw image updates at `2026.9.9`.
+That version is the controlled test target for Synology NAS devices with older
+Linux 4.4 kernels, including DS220+ deployments, after earlier OpenClaw releases
+hit `openat2` / `fs-safe` compatibility problems during startup or migration.
+
+Do not remove the cap or publish a newer NAS image until the new OpenClaw version
+has been tested on the target NAS and `./openclaw doctor` completes successfully.
+
+
 ---
 
 ## Troubleshooting
