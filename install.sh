@@ -28,6 +28,7 @@ cd "$SCRIPT_DIR"
 ENV_FILE=".env"
 CERTS_DIR="certs"
 DEFAULT_HTTPS_PORT="8443"
+RAW_BASE_URL="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -504,7 +505,7 @@ services:
       - ./config:/home/node/.openclaw
       - ./workspace:/home/node/.openclaw/workspace
 
-    entrypoint: []
+    entrypoint: ["/home/node/entrypoint.sh"]
     command: ["node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "lan", "--port", "18789"]
 
     healthcheck:
@@ -609,7 +610,9 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            # Rebuild this header from the socket peer. Never preserve a
+            # client-supplied X-Forwarded-For value before trusting the proxy.
+            proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-Host $http_host;
             proxy_set_header X-Forwarded-Port $server_port;
@@ -710,17 +713,21 @@ cmd_update() {
     local base="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
     curl -fsSL "$base/install.sh"        -o install.sh
     curl -fsSL "$base/docker-compose.yml" -o docker-compose.yml
+    curl -fsSL "$base/openclaw"           -o openclaw
+    chmod +x openclaw
+    mkdir -p scripts
+    curl -fsSL "$base/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
     printf 'Stack files updated.\n'
   fi
 
-  compose --profile https-local pull
-  compose_up
+  # Re-enter the freshly downloaded wrapper so an older installed wrapper
+  # still receives the migration workflow on its first update.
+  exec "$SCRIPT_DIR/openclaw" __update_after_sync "$@"
+}
 
-  if [[ -f "install.sh" ]]; then
-    printf 'Regenerating openclaw wrapper...\n'
-    bash install.sh --wrapper-only
-    printf 'Wrapper updated.\n'
-  fi
+cmd_update_after_sync() {
+  compose --profile https-local pull
+  bash scripts/migrate-openclaw.sh upgrade
 }
 
 openclaw_cli() {
@@ -767,6 +774,7 @@ main() {
     message) openclaw_cli message "$@" ;;
     agent) openclaw_cli agent "$@" ;;
     update) cmd_update "$@" ;;
+    __update_after_sync) cmd_update_after_sync "$@" ;;
     pip) cmd_pip "$@" ;;
     start|up) compose_up "$@" ;;
     stop|down) compose down "$@" ;;
@@ -789,6 +797,19 @@ generate_files_if_missing() {
   write_docker_compose
   write_nginx_conf_if_missing
   write_openclaw_wrapper_if_missing
+}
+
+ensure_migration_helper() {
+  mkdir -p scripts
+  if [[ -f "scripts/migrate-openclaw.sh" ]]; then
+    chmod +x scripts/migrate-openclaw.sh
+    return
+  fi
+
+  section "Installing NAS migration helper"
+  curl -fsSL "$RAW_BASE_URL/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
+  chmod +x scripts/migrate-openclaw.sh
+  success "Installed migration helper"
 }
 
 # ─── Installation steps ───────────────────────────────────────────────────────
@@ -1047,6 +1068,19 @@ configure_gateway() {
   fi
 }
 
+ensure_migration_helper() {
+  mkdir -p scripts
+  if [[ -f "scripts/migrate-openclaw.sh" ]]; then
+    chmod +x scripts/migrate-openclaw.sh
+    return
+  fi
+
+  section "Installing NAS migration helper"
+  curl -fsSL "$RAW_BASE_URL/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
+  chmod +x scripts/migrate-openclaw.sh
+  success "Installed migration helper"
+}
+
 print_next_steps() {
   local nas_ip="$1"
   local https_port
@@ -1138,6 +1172,7 @@ main() {
 
   generate_files_if_missing
   check_tools
+  ensure_migration_helper
   check_legacy_containers
   prepare_runtime_dirs
   prepare_env "$nas_ip"
@@ -1151,6 +1186,7 @@ main() {
   pre_configure_gateway "$nas_ip" "$https_port"
   start_stack
   configure_gateway "$nas_ip" "$https_port"
+  bash scripts/migrate-openclaw.sh configure-proxy
 
   print_next_steps "$nas_ip"
 }
