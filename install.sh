@@ -799,19 +799,6 @@ generate_files_if_missing() {
   write_openclaw_wrapper_if_missing
 }
 
-ensure_migration_helper() {
-  mkdir -p scripts
-  if [[ -f "scripts/migrate-openclaw.sh" ]]; then
-    chmod +x scripts/migrate-openclaw.sh
-    return
-  fi
-
-  section "Installing NAS migration helper"
-  curl -fsSL "$RAW_BASE_URL/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
-  chmod +x scripts/migrate-openclaw.sh
-  success "Installed migration helper"
-}
-
 # ─── Installation steps ───────────────────────────────────────────────────────
 
 check_tools() {
