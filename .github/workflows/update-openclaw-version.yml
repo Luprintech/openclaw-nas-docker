@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write
-  actions: write
+  pull-requests: write
 
 jobs:
   check-version:
@@ -23,7 +23,7 @@ jobs:
         id: check
         run: |
           chmod +x scripts/update-openclaw-version.sh
-          scripts/update-openclaw-version.sh
+          scripts/update-openclaw-version.sh --propose
           if git diff --quiet .last-openclaw-version; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -32,23 +32,29 @@ jobs:
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit and push
+      - name: Open version update PR
         if: steps.check.outputs.changed == 'true'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .last-openclaw-version
-          git commit -m "chore: update OpenClaw to ${{ steps.check.outputs.version }}"
-          git push
-
-      - name: Trigger Docker image publish
-        if: steps.check.outputs.changed == 'true'
-        uses: actions/github-script@v7
+        uses: peter-evans/create-pull-request@v7
         with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'docker-publish.yml',
-              ref: 'main'
-            });
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: main
+          branch: automation/openclaw-${{ steps.check.outputs.version }}
+          delete-branch: true
+          commit-message: "chore: propose OpenClaw ${{ steps.check.outputs.version }}"
+          title: "chore: propose OpenClaw ${{ steps.check.outputs.version }}"
+          labels: type:chore
+          body: |
+            ## Automated OpenClaw version proposal
+
+            This PR was created automatically after detecting OpenClaw `${{ steps.check.outputs.version }}`.
+
+            The image is **not** published until this PR is reviewed and merged.
+
+            ### Synology validation required
+
+            - [ ] Test the candidate on a clean Synology installation.
+            - [ ] Test the upgrade and migration path.
+            - [ ] Confirm the gateway reaches `ready` and Docker reports `healthy`.
+            - [ ] Confirm the HTTPS Control UI and browser approval flow.
+
+            After merging, the Docker publish workflow will build and publish the approved version.
