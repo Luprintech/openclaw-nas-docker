@@ -421,6 +421,12 @@ required state migrations, repairs the reverse-proxy trust configuration, and
 restarts the stack only after the gateway is healthy. By default,
 `docker-compose.yml` uses the published `latest` image.
 
+Older installations that used the former local image name
+`openclaw-nas-docker:synology-<version>` are migrated automatically on the
+first update to the matching public GHCR image. The previous `.env` is saved
+as `.env.before-image-migration.<timestamp>` before this change. Custom image
+names are left untouched.
+
 The migration is deliberately performed through Docker rather than by copying
 `config/` as the SSH user. Synology permissions can prevent the SSH user from
 reading files owned by UID 1000 inside the container. The helper also runs the
