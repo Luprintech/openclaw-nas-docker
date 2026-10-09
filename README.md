@@ -415,16 +415,68 @@ Recommended update path on the NAS:
 ./openclaw update
 ```
 
-`./openclaw update` pulls repository changes, pulls the configured image, and
-restarts the stack. By default, `docker-compose.yml` uses the published `latest`
-image. `.last-openclaw-version` is only the CI build tracker, not a NAS runtime
-setting.
+`./openclaw update` pulls repository changes, pulls the configured image,
+creates a Docker-level backup of the protected OpenClaw state, runs the
+required state migrations, repairs the reverse-proxy trust configuration, and
+restarts the stack only after the gateway is healthy. By default,
+`docker-compose.yml` uses the published `latest` image.
+
+The migration is deliberately performed through Docker rather than by copying
+`config/` as the SSH user. Synology permissions can prevent the SSH user from
+reading files owned by UID 1000 inside the container. The helper also runs the
+dedicated session SQLite import required by recent OpenClaw releases; a plain
+`openclaw doctor --fix` is not sufficient for every non-interactive upgrade.
+
+During a clean installation, the installer repairs the ownership of `config/`
+and `workspace/` through a one-off Docker container because the Synology SSH
+user may not have permission to run `chown` on those bind mounts.
+
+On Synology, `openclaw doctor --fix` can report
+`EPERM: operation not permitted, fchmod` after applying migrations. Treat this
+as non-fatal only when the helper completes, the gateway log contains
+`gateway ready`, and `docker compose ps` reports the gateway as `healthy`.
+Otherwise stop and inspect the backup and logs before retrying.
+
+If an upgrade reports a failure, do not repeatedly restart the gateway. Keep
+the printed backup directory and inspect:
+
+```bash
+docker compose ps
+docker compose logs --since 5m --tail=120 openclaw-gateway
+```
+
+The update helper does not delete the backup or silently restore data. This
+keeps recovery explicit and prevents a second migration from overwriting the
+operator's evidence.
 
 Manual version pin update, usually only needed by maintainers:
 
 ```bash
 ./openclaw update-version
 ```
+
+### Synology compatibility test target
+
+This repository currently caps automated OpenClaw image updates at `2026.9.9`.
+That version is the controlled test target for Synology NAS devices with older
+Linux 4.4 kernels, including DS220+ deployments, after earlier OpenClaw releases
+hit `openat2` / `fs-safe` compatibility problems during startup or migration.
+
+Do not remove the cap or publish a newer NAS image until the new OpenClaw version
+has been tested on the target NAS, the gateway reaches `ready`, the healthcheck
+is healthy, and the HTTPS Control UI works through Nginx.
+
+### Reverse-proxy trust on OpenClaw 2026.9+
+
+The installer configures Nginx to overwrite `X-Forwarded-For` with the actual
+client socket address. It then detects the current Nginx container IP and adds
+only that IP to `gateway.trustedProxies`. This avoids trusting arbitrary
+forwarded headers while remaining safe when Docker assigns a different Nginx
+IP after an update.
+
+Do not replace this with a broad Docker subnet or enable real-IP fallback unless
+you have reviewed the proxy boundary and header behavior.
+
 
 ---
 
