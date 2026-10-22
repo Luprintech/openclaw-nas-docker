@@ -488,10 +488,12 @@ merge it only after the gateway reaches `ready`, the healthcheck is healthy,
 and the HTTPS Control UI works through Nginx. Merging the PR triggers the
 Docker image publication workflow.
 
-Direct or manual version updates remain capped at `2026.9.9` because that is
-the controlled test target for Synology NAS devices with older Linux 4.4
-kernels, including DS220+ deployments. The proposal workflow may suggest a
-newer version, but it cannot reach users until the PR is reviewed and merged.
+Direct or manual version updates are capped at `2026.10.5` (`MAX_VERSION` in
+`scripts/update-openclaw-version.sh`) because that is the latest version
+validated on Synology NAS devices with older Linux 4.4 kernels, including
+DS220+ deployments. The proposal workflow may suggest a newer version, but it
+cannot reach users until the PR is reviewed and merged. Raise the cap only
+after repeating that validation on the target NAS.
 
 ### Reverse-proxy trust on OpenClaw 2026.9+
 
