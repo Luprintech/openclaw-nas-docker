@@ -23,7 +23,9 @@ PROPOSE=false
 # OpenClaw 2026.10.5 was validated on a DS220+ (kernel 4.4.302): migration,
 # healthy gateway and HTTPS Control UI. It is the current controlled Synology
 # test target for this repository; raise it only after repeating that test.
-MAX_VERSION="2026.10.5"
+# Override per run with OPENCLAW_MAX_VERSION=<version>; set it to an empty
+# value (OPENCLAW_MAX_VERSION=) to remove the cap and follow the latest release.
+MAX_VERSION="${OPENCLAW_MAX_VERSION-2026.10.5}"
 
 # True when dotted version $1 is strictly newer than $2. Plain string
 # comparison is wrong here: "2026.10.5" sorts before "2026.9.9".
@@ -48,6 +50,10 @@ date-based Docker tag, and updates .last-openclaw-version.
 
 --propose allows CI to prepare a newer candidate without publishing it.
 It does not run docker compose build/up/pull.
+
+Direct updates are capped at the last version validated on Synology. Set
+OPENCLAW_MAX_VERSION=<version> to use another cap, or OPENCLAW_MAX_VERSION=
+(empty) to disable it.
 USAGE
 }
 
