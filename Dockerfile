@@ -73,5 +73,11 @@ RUN chmod +x /home/node/entrypoint.sh
 
 USER node
 
-# Install Claude Code CLI for users who prefer Anthropic's terminal workflow
-RUN npm install -g @anthropic-ai/claude-code
+# Install Claude Code CLI for users who prefer Anthropic's terminal workflow.
+# The package ships a placeholder bin/claude.exe that its postinstall script
+# replaces with the native binary. npm 12 blocks install scripts unless they
+# are allowed explicitly, which left the placeholder in place and made
+# `claude` fail with "exec format error". The final check fails the build
+# instead of publishing an image with a broken CLI.
+RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code && \
+    claude --version
