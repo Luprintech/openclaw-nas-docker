@@ -396,6 +396,13 @@ Sign in once, then check the status:
 docker compose exec openclaw-gateway claude auth status --text
 ```
 
+Claude Code accepts an Anthropic account login or an API key. For shared or
+continuous automation through the gateway, OpenClaw's documentation recommends
+the Anthropic API-key path for predictable billing
+([Docker storage](https://docs.openclaw.ai/install/docker/networking-and-storage)).
+If you use an account login with third-party tools, check Anthropic's current
+terms and usage limits.
+
 `config/claude` stores your Claude login token in plain text, like the gateway
 token in `.env`. Do not share or commit it. `./openclaw update` backups include
 it, so delete old `openclaw-backup-*` folders once you no longer need them.
@@ -539,6 +546,30 @@ you have reviewed the proxy boundary and header behavior.
 ---
 
 ## Troubleshooting
+
+### Plugin requires a newer plugin API than this OpenClaw runtime
+
+If installing a plugin fails with a message like:
+
+```text
+Plugin "@openclaw/whatsapp" requires plugin API >=2026.10.1, but this OpenClaw
+runtime exposes 2026.9.9.
+```
+
+this is a version mismatch, not a permissions problem. The plugin was published
+for a newer OpenClaw release than the image you are running. Update first, then
+retry the install:
+
+```bash
+./openclaw update
+docker compose exec openclaw-gateway node dist/index.js --version
+```
+
+If the plugin still asks for a newer API than the version printed, it was
+published for a release that this repository has not validated and published
+yet. New OpenClaw versions reach the image only after they are tested on
+Synology (see [Synology compatibility test target](#synology-compatibility-test-target)),
+so wait for the next release of this repository and update again.
 
 ### EACCES: permission denied
 
