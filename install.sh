@@ -706,10 +706,14 @@ compose_restart() {
 }
 
 normalize_legacy_image_override() {
-  local current version replacement backup_file temp_file
+  local current version backup_file temp_file
 
   [[ -f ".env" ]] || return 0
 
+  # docker-compose.yml follows the latest published image only while
+  # OPENCLAW_IMAGE is empty. A version-pinned reference to the official image
+  # (written by older installers or by the former migration) would freeze
+  # every future update, so it is cleared. Custom image names are kept.
   current="$(sed -n 's/^OPENCLAW_IMAGE=//p' .env | head -n 1 | tr -d '\r')"
   case "$current" in
     openclaw-nas-docker:synology-*)
@@ -718,6 +722,9 @@ normalize_legacy_image_override() {
     openclaw-nas-docker:202*)
       version="${current#openclaw-nas-docker:}"
       ;;
+    ghcr.io/luprintech/openclaw-nas-docker:202*)
+      version="${current#ghcr.io/luprintech/openclaw-nas-docker:}"
+      ;;
     *)
       return 0
       ;;
@@ -725,22 +732,21 @@ normalize_legacy_image_override() {
 
   [[ "$version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]] || return 0
 
-  replacement="ghcr.io/luprintech/openclaw-nas-docker:${version}"
   backup_file=".env.before-image-migration.$(date +%Y%m%d-%H%M%S)"
   temp_file=".env.tmp.$$"
   cp -p .env "$backup_file"
-  awk -v replacement="$replacement" '
+  awk '
     BEGIN { replaced = 0 }
     /^OPENCLAW_IMAGE=/ && !replaced {
-      print "OPENCLAW_IMAGE=" replacement
+      print "OPENCLAW_IMAGE="
       replaced = 1
       next
     }
     { print }
   ' .env > "$temp_file"
   mv "$temp_file" .env
-  printf 'Migrated legacy local image override to %s (backup: %s).\n' \
-    "$replacement" "$backup_file"
+  printf 'Removed the image version pin (%s) so updates follow the latest published image (backup: %s).\n' \
+    "$current" "$backup_file"
 }
 
 cmd_update() {
