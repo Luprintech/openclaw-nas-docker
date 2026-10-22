@@ -493,7 +493,9 @@ Direct or manual version updates are capped at `2026.10.5` (`MAX_VERSION` in
 validated on Synology NAS devices with older Linux 4.4 kernels, including
 DS220+ deployments. The proposal workflow may suggest a newer version, but it
 cannot reach users until the PR is reviewed and merged. Raise the cap only
-after repeating that validation on the target NAS.
+after repeating that validation on the target NAS. For a single run you can
+override it with `OPENCLAW_MAX_VERSION=<version>`, or remove it with an empty
+`OPENCLAW_MAX_VERSION=` to follow the latest official release.
 
 ### Reverse-proxy trust on OpenClaw 2026.9+
 
