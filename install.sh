@@ -500,6 +500,9 @@ services:
       FORCE_COLOR: "1"
       CI: "false"
       OPENCLAW_SHOW_DEVICE_CODE: "true"
+      # Keep Claude Code login, settings, memory and history across container
+      # re-creation. Stored under ./config, which is already persisted.
+      CLAUDE_CONFIG_DIR: /home/node/.openclaw/claude
 
     volumes:
       - ./config:/home/node/.openclaw
@@ -536,6 +539,9 @@ services:
       FORCE_COLOR: "1"
       CI: "false"
       OPENCLAW_SHOW_DEVICE_CODE: "true"
+      # Keep Claude Code login, settings, memory and history across container
+      # re-creation. Stored under ./config, which is already persisted.
+      CLAUDE_CONFIG_DIR: /home/node/.openclaw/claude
 
     volumes:
       - ./config:/home/node/.openclaw
