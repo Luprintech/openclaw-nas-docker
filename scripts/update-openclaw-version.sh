@@ -20,9 +20,26 @@ PROPOSE=false
 # those kernels during startup or state migration. Keep direct/manual updates
 # capped to a version explicitly reviewed for Synology. CI proposal mode can
 # prepare a newer version in a PR so it can be tested before publication.
-# OpenClaw 2026.9.9 bundles @openclaw/fs-safe 0.21.1 and is the current
-# controlled Synology test target for this repository.
-MAX_VERSION="2026.9.9"
+# OpenClaw 2026.10.5 was validated on a DS220+ (kernel 4.4.302): migration,
+# healthy gateway and HTTPS Control UI. It is the current controlled Synology
+# test target for this repository; raise it only after repeating that test.
+# Override per run with OPENCLAW_MAX_VERSION=<version>; set it to an empty
+# value (OPENCLAW_MAX_VERSION=) to remove the cap and follow the latest release.
+MAX_VERSION="${OPENCLAW_MAX_VERSION-2026.10.5}"
+
+# True when dotted version $1 is strictly newer than $2. Plain string
+# comparison is wrong here: "2026.10.5" sorts before "2026.9.9".
+version_gt() {
+  local IFS=. i x y
+  local -a a=($1) b=($2)
+  for i in 0 1 2; do
+    x="${a[i]:-0}"; x="${x%%[!0-9]*}"
+    y="${b[i]:-0}"; y="${y%%[!0-9]*}"
+    (( 10#${x:-0} > 10#${y:-0} )) && return 0
+    (( 10#${x:-0} < 10#${y:-0} )) && return 1
+  done
+  return 1
+}
 
 usage() {
   cat <<'USAGE'
@@ -33,6 +50,10 @@ date-based Docker tag, and updates .last-openclaw-version.
 
 --propose allows CI to prepare a newer candidate without publishing it.
 It does not run docker compose build/up/pull.
+
+Direct updates are capped at the last version validated on Synology. Set
+OPENCLAW_MAX_VERSION=<version> to use another cap, or OPENCLAW_MAX_VERSION=
+(empty) to disable it.
 USAGE
 }
 
@@ -139,12 +160,12 @@ main() {
   # guard because the resulting branch must be tested and approved before it
   # can reach main or trigger image publication.
   if [[ "$PROPOSE" != "true" && -n "$MAX_VERSION" ]]; then
-    if [[ "$latest" > "$MAX_VERSION" ]]; then
+    if version_gt "$latest" "$MAX_VERSION"; then
       printf 'Latest version %s exceeds MAX_VERSION cap %s — keeping %s.\n' \
         "$latest" "$MAX_VERSION" "$MAX_VERSION" >&2
       latest="$MAX_VERSION"
     fi
-    if [[ -n "$current" && "$current" > "$MAX_VERSION" && "$latest" < "$current" ]]; then
+    if [[ -n "$current" ]] && version_gt "$current" "$MAX_VERSION" && version_gt "$current" "$latest"; then
       printf 'Current approved version %s is above MAX_VERSION cap %s — keeping %s.\n' \
         "$current" "$MAX_VERSION" "$current" >&2
       latest="$current"
