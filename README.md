@@ -375,6 +375,33 @@ Raw CLI pass-through:
 
 ---
 
+## Claude Code CLI
+
+The image includes Claude Code. `./openclaw claude` opens it in a throwaway
+container, and the OpenClaw gateway can use the same CLI as its `claude-cli`
+model backend (see the
+[OpenClaw CLI backends documentation](https://docs.openclaw.ai/gateway/cli-backends)).
+
+Both containers set `CLAUDE_CONFIG_DIR=/home/node/.openclaw/claude`, which is
+`config/claude` on the NAS. Your Claude login, settings, memory and
+conversation history live there, so they survive closing the CLI, restarting
+the stack and updating the image, and the gateway sees the same login as the
+CLI. Installations that update from an older release sign in once more,
+because the previous session only existed inside the removed container.
+
+Sign in once, then check the status:
+
+```bash
+./openclaw claude                # then run /login and follow the prompts
+docker compose exec openclaw-gateway claude auth status --text
+```
+
+`config/claude` stores your Claude login token in plain text, like the gateway
+token in `.env`. Do not share or commit it. `./openclaw update` backups include
+it, so delete old `openclaw-backup-*` folders once you no longer need them.
+
+---
+
 ## Installing Python skills
 
 The container includes Python 3 and pip. Packages are stored in a virtual environment at `/home/node/.openclaw/python-venv`, inside the persisted `config/` volume — they survive container restarts and image updates.
