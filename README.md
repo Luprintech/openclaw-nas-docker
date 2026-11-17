@@ -515,19 +515,24 @@ Manual version pin update, usually only needed by maintainers:
 
 ### Synology compatibility test target
 
-The scheduled updater checks for new OpenClaw releases every six hours and opens
-a pull request instead of committing directly to `main` or publishing an image.
-The PR is the compatibility gate: test the candidate on the target NAS, then
-merge it only after the gateway reaches `ready`, the healthcheck is healthy,
-and the HTTPS Control UI works through Nginx. Merging the PR triggers the
-Docker image publication workflow.
+The scheduled updater checks for new OpenClaw releases every six hours and
+needs no manual step. For each new release it builds the candidate image and
+runs `scripts/smoke-test.sh` on a CI runner: clean start, upgrade from the
+currently published image on the same `./config`, healthy gateway and a working
+`claude` CLI. If everything passes, it updates `.last-openclaw-version` on
+`main` and triggers the Docker publication workflow. If it fails, nothing is
+published and an issue labelled `openclaw-update-failed` is opened. Close that
+issue and run the workflow manually to retry the same version.
+
+CI runners use a modern kernel, so this test does not reproduce the Linux 4.4
+kernels of some Synology models. If you need that extra gate, set
+`OPENCLAW_MAX_VERSION` and test those versions on the NAS before raising it.
 
 Direct or manual version updates are capped at `2026.10.5` (`MAX_VERSION` in
 `scripts/update-openclaw-version.sh`) because that is the latest version
 validated on Synology NAS devices with older Linux 4.4 kernels, including
-DS220+ deployments. The proposal workflow may suggest a newer version, but it
-cannot reach users until the PR is reviewed and merged. Raise the cap only
-after repeating that validation on the target NAS. For a single run you can
+DS220+ deployments. The automatic workflow does not apply this cap. Raise the
+cap only after repeating that validation on the target NAS. For a single run you can
 override it with `OPENCLAW_MAX_VERSION=<version>`, or remove it with an empty
 `OPENCLAW_MAX_VERSION=` to follow the latest official release.
 
