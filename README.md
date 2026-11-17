@@ -507,6 +507,12 @@ The update helper does not delete the backup or silently restore data. This
 keeps recovery explicit and prevents a second migration from overwriting the
 operator's evidence.
 
+> **Always update with `./openclaw update`.** Running only `docker compose pull`
+> and `up -d` skips the state migration. Recent releases then start with a
+> degraded agent database (`schema version 25 ... run openclaw doctor --fix`),
+> Docker still reports the gateway as healthy, and the Control UI does not load.
+> If that already happened, run `bash scripts/migrate-openclaw.sh upgrade`.
+
 Manual version pin update, usually only needed by maintainers:
 
 ```bash
@@ -519,7 +525,8 @@ The scheduled updater checks for new OpenClaw releases every six hours and
 needs no manual step. For each new release it builds the candidate image and
 runs `scripts/smoke-test.sh` on a CI runner: clean start, upgrade from the
 currently published image on the same `./config`, healthy gateway and a working
-`claude` CLI. If everything passes, it updates `.last-openclaw-version` on
+`claude` CLI. It also fails if the gateway ends up degraded, because `/healthz`
+reports healthy even when the agent database has not been migrated. If everything passes, it updates `.last-openclaw-version` on
 `main` and triggers the Docker publication workflow. If it fails, nothing is
 published and an issue labelled `openclaw-update-failed` is opened. Close that
 issue and run the workflow manually to retry the same version.

@@ -5,9 +5,13 @@
 #
 # Qué comprueba:
 #   1. Instalación limpia: el gateway arranca y Docker lo marca como healthy.
-#   2. Actualización: arranca la versión publicada actualmente, la para y
-#      arranca la candidata sobre el mismo ./config (migración de estado).
-#   3. Que el CLI de Claude Code incluido en la imagen funciona.
+#   2. Actualización: arranca la versión publicada actualmente, la para,
+#      ejecuta la misma migración que usa un usuario (scripts/migrate-openclaw.sh)
+#      y arranca la candidata sobre el mismo ./config.
+#   3. Que el gateway NO queda degradado. /healthz responde "healthy" aunque la
+#      base de datos del agente esté sin migrar, así que también se vigilan
+#      los logs durante un tiempo de espera.
+#   4. Que el CLI de Claude Code incluido en la imagen funciona.
 #
 # Uso:
 #   scripts/smoke-test.sh <imagen-candidata> [imagen-anterior]
@@ -20,6 +24,7 @@ set -euo pipefail
 CANDIDATE="${1:?Uso: $0 <imagen-candidata> [imagen-anterior]}"
 PREVIOUS="${2:-}"
 TIMEOUT="${SMOKE_TIMEOUT:-300}"
+SETTLE="${SMOKE_SETTLE:-150}"
 PROJECT="openclaw-smoke"
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,6 +33,8 @@ cd "$PROJECT_DIR"
 export OPENCLAW_HOST_BIND=127.0.0.1
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 export TZ=UTC
+export COMPOSE_PROJECT_NAME="$PROJECT"
+export OPENCLAW_BACKUP_ROOT="${RUNNER_TEMP:-/tmp}/openclaw-smoke-backups"
 OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
 export OPENCLAW_GATEWAY_TOKEN
 
@@ -72,6 +79,23 @@ wait_healthy() {
   return 1
 }
 
+# El estado "healthy" no basta: la base de datos del agente se prepara después
+# de abrir el puerto y, si no está migrada, el gateway queda degradado con las
+# sesiones caídas. Se observan los logs durante SETTLE segundos.
+assert_not_degraded() {
+  local label="$1" elapsed=0
+  while (( elapsed < SETTLE )); do
+    if compose logs --no-color openclaw-gateway 2>&1 | grep -qi "remains degraded"; then
+      echo "ERROR [$label]: el gateway quedó degradado"
+      compose logs --no-color --tail 200 openclaw-gateway | grep -i -B2 -A2 "degraded" || true
+      return 1
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  echo "OK [$label]: sin degradación tras ${SETTLE}s"
+}
+
 start_with() {
   local image="$1"
   OPENCLAW_IMAGE="$image" compose up -d openclaw-gateway
@@ -85,6 +109,7 @@ prepare_dirs() {
 }
 
 prepare_dirs
+PREVIOUS_RAN=false
 
 # --- Fase 1: actualización desde la versión publicada --------------------
 if [[ -n "$PREVIOUS" ]] && docker pull "$PREVIOUS" >/dev/null 2>&1; then
@@ -92,7 +117,7 @@ if [[ -n "$PREVIOUS" ]] && docker pull "$PREVIOUS" >/dev/null 2>&1; then
   start_with "$PREVIOUS"
   wait_healthy "anterior"
   compose stop openclaw-gateway
-  compose rm -f openclaw-gateway >/dev/null
+  PREVIOUS_RAN=true
 else
   echo "AVISO: no se pudo descargar la imagen anterior, se omite la prueba de actualización."
   prepare_dirs
@@ -100,8 +125,13 @@ fi
 
 # --- Fase 2: candidata (sobre el estado de la fase 1, si existe) ---------
 echo "== Fase 2: candidata ($CANDIDATE) =="
+if [[ "$PREVIOUS_RAN" == "true" ]]; then
+  echo "== Migración de estado con la imagen candidata =="
+  OPENCLAW_IMAGE="$CANDIDATE" bash scripts/migrate-openclaw.sh migrate
+fi
 start_with "$CANDIDATE"
 wait_healthy "candidata"
+assert_not_degraded "candidata"
 
 echo "== Comprobando CLI de Claude Code =="
 compose exec -T openclaw-gateway claude --version
