@@ -1,17 +1,35 @@
 name: Update OpenClaw version
 
+# Flujo automático, sin PRs:
+#   detectar versión nueva -> construir candidata -> smoke test ->
+#   si pasa: actualizar main y publicar; si falla: abrir un issue.
+
 on:
   schedule:
-    - cron: '0 */6 * * *'   # every 6 hours
-  workflow_dispatch:          # manual trigger from GitHub UI
+    - cron: '0 */6 * * *'   # cada 6 horas
+  workflow_dispatch:          # lanzamiento manual desde la UI de GitHub
 
 permissions:
   contents: write
+  actions: write
+  issues: write
   pull-requests: write
 
+# Evita que dos ejecuciones se pisen (por ejemplo cron + manual).
+concurrency:
+  group: update-openclaw-version
+  cancel-in-progress: false
+
+env:
+  GHCR_IMAGE: ghcr.io/luprintech/openclaw-nas-docker
+
 jobs:
-  check-version:
+  detect:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      version: ${{ steps.check.outputs.version }}
+      current: ${{ steps.check.outputs.current }}
 
     steps:
       - uses: actions/checkout@v4
@@ -19,42 +37,124 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get install -y --no-install-recommends jq
 
-      - name: Check and update version pins
+      - name: Check latest OpenClaw version
         id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x scripts/update-openclaw-version.sh
+          CURRENT="$(tr -d '[:space:]' < .last-openclaw-version)"
           scripts/update-openclaw-version.sh --propose
+
           if git diff --quiet .last-openclaw-version; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            VERSION="$(tr -d '[:space:]' < .last-openclaw-version)"
-            echo "changed=true"  >> "$GITHUB_OUTPUT"
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      - name: Open version update PR
-        if: steps.check.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+          VERSION="$(tr -d '[:space:]' < .last-openclaw-version)"
+
+          # Si esta versión ya falló y el issue sigue abierto, no se repite
+          # el test cada 6 horas. Cerrar el issue vuelve a habilitarla.
+          OPEN="$(gh issue list --state open --label openclaw-update-failed \
+            --search "\"OpenClaw ${VERSION}\" in:title" --json number --jq 'length')"
+          if [[ "$OPEN" != "0" ]]; then
+            echo "OpenClaw ${VERSION} ya falló y tiene un issue abierto, se omite."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "changed=true"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build candidate image
+        uses: docker/build-push-action@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          base: main
-          branch: automation/openclaw-${{ steps.check.outputs.version }}
-          delete-branch: true
-          commit-message: "chore: propose OpenClaw ${{ steps.check.outputs.version }}"
-          title: "chore: propose OpenClaw ${{ steps.check.outputs.version }}"
-          labels: type:chore
-          body: |
-            ## Automated OpenClaw version proposal
+          context: .
+          load: true
+          push: false
+          provenance: false
+          platforms: linux/amd64
+          build-args: |
+            OPENCLAW_VERSION=${{ needs.detect.outputs.version }}
+          tags: openclaw-candidate:${{ needs.detect.outputs.version }}
 
-            This PR was created automatically after detecting OpenClaw `${{ steps.check.outputs.version }}`.
+      - name: Smoke test (clean start + upgrade from published image)
+        run: |
+          chmod +x scripts/smoke-test.sh
+          scripts/smoke-test.sh \
+            "openclaw-candidate:${{ needs.detect.outputs.version }}" \
+            "${{ env.GHCR_IMAGE }}:${{ needs.detect.outputs.current }}"
 
-            The image is **not** published until this PR is reviewed and merged.
+  release:
+    needs: [detect, validate]
+    runs-on: ubuntu-latest
 
-            ### Synology validation required
+    steps:
+      - uses: actions/checkout@v4
 
-            - [ ] Test the candidate on a clean Synology installation.
-            - [ ] Test the upgrade and migration path.
-            - [ ] Confirm the gateway reaches `ready` and Docker reports `healthy`.
-            - [ ] Confirm the HTTPS Control UI and browser approval flow.
+      - name: Pin validated version on main
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          echo "$VERSION" > .last-openclaw-version
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .last-openclaw-version
+          git commit -m "chore: update OpenClaw to ${VERSION}"
+          git push origin HEAD:main
 
-            After merging, the Docker publish workflow will build and publish the approved version.
+      # Los pushes hechos con GITHUB_TOKEN no disparan otros workflows,
+      # así que la publicación se lanza explícitamente.
+      - name: Trigger image publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run docker-publish.yml --ref main
+
+      - name: Close stale proposal PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          gh pr list --state open --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("automation/openclaw-")) | .number' |
+          while read -r PR; do
+            gh pr close "$PR" --delete-branch \
+              --comment "Obsoleto: OpenClaw ${VERSION} se validó y publicó automáticamente."
+          done
+
+  report-failure:
+    needs: [detect, validate]
+    if: failure() && needs.validate.result == 'failure'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Open issue for failed validation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create openclaw-update-failed --color B60205 \
+            --description "Automatic OpenClaw update failed validation" \
+            --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --label openclaw-update-failed \
+            --title "OpenClaw ${VERSION} failed automatic validation" \
+            --body "La versión \`${VERSION}\` no ha superado el smoke test, así que **no** se ha publicado y \`main\` sigue en la versión anterior.
+
+          Logs: ${RUN_URL}
+
+          Se reintentará con la siguiente versión que salga. Para reintentar esta misma, cierra este issue y lanza el workflow a mano."

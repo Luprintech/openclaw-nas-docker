@@ -91,6 +91,10 @@ normalize_legacy_config() {
     const fs = require("fs");
     const JSON5 = require("json5");
     const path = "/home/node/.openclaw/openclaw.json";
+    if (!fs.existsSync(path)) {
+      console.log("No openclaw.json yet; nothing to normalize.");
+      process.exit(0);
+    }
     let raw = fs.readFileSync(path, "utf8");
     const literalBackslashNewline = String.raw`\n`;
     const trimmed = raw.trimEnd();
@@ -166,6 +170,11 @@ upgrade() {
 }
 
 case "${1:-upgrade}" in
+  migrate)
+    # Solo migraciones de estado, sin tocar Nginx ni arrancar el gateway.
+    # Lo usa el smoke test de CI.
+    run_migrations
+    ;;
   configure-proxy)
     configure_proxy
     ;;
@@ -173,6 +182,6 @@ case "${1:-upgrade}" in
     upgrade
     ;;
   *)
-    error "Usage: scripts/migrate-openclaw.sh {upgrade|configure-proxy}"
+    error "Usage: scripts/migrate-openclaw.sh {upgrade|migrate|configure-proxy}"
     ;;
 esac
