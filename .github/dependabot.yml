@@ -1,0 +1,17 @@
+# Keeps the SHA-pinned GitHub Actions up to date. Minor and patch updates are
+# grouped into a single weekly PR; each major update gets its own PR.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - type:chore
+    commit-message:
+      prefix: ci
+    groups:
+      actions-minor:
+        update-types:
+          - minor
+          - patch
