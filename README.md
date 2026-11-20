@@ -435,6 +435,17 @@ Every image is published under several tags:
 | `edge` | As soon as a new OpenClaw version passes the automated tests | You want new versions early and can recover from a broken update |
 | `<version>` (e.g. `2026.11.6`) | Never; it always points to the same image | You want to stay on an exact version |
 
+Version tags are immutable. If the image is rebuilt for the same OpenClaw
+version (for example after a fix in this repository), it is published with a
+suffix such as `2026.11.6-1` instead of replacing `2026.11.6`.
+
+Every image carries a signed build provenance attestation. To check that an
+image was built by this repository's workflow:
+
+```bash
+gh attestation verify oci://ghcr.io/luprintech/openclaw-nas-docker:latest \n  --repo luprintech/openclaw-nas-docker
+```
+
 How a new OpenClaw version reaches `latest`:
 
 1. Every six hours a workflow checks for a new **stable** OpenClaw release
