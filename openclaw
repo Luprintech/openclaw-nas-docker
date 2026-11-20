@@ -70,6 +70,82 @@ compose_restart() {
   compose --profile https-local restart "$@"
 }
 
+# Update notice. Once a day, in the background, the wrapper asks the GitHub API
+# for the latest stable release and caches the answer. Commands only read the
+# cache, so the check never slows them down and never fails them.
+# Disable it with OPENCLAW_NO_UPDATE_CHECK=1 in .env or in the environment.
+UPDATE_CHECK_FILE=".update-check"
+UPDATE_CHECK_URL="https://api.github.com/repos/luprintech/openclaw-nas-docker/releases/latest"
+UPDATE_CHECK_INTERVAL=86400
+DEFAULT_IMAGE="ghcr.io/luprintech/openclaw-nas-docker:latest"
+
+update_check_disabled() {
+  [[ "${OPENCLAW_NO_UPDATE_CHECK:-}" == "1" ]] && return 0
+  [[ -f .env ]] && grep -qE '^OPENCLAW_NO_UPDATE_CHECK=1[[:space:]]*$' .env && return 0
+  return 1
+}
+
+configured_image() {
+  local image=""
+  [[ -f .env ]] && image="$(sed -n 's/^OPENCLAW_IMAGE=//p' .env | tail -n 1 | tr -d "\"'[:space:]")"
+  printf '%s\n' "${image:-$DEFAULT_IMAGE}"
+}
+
+refresh_update_cache() {
+  local now checked=0 previous=""
+  now="$(date +%s)"
+  if [[ -f "$UPDATE_CHECK_FILE" ]]; then
+    read -r checked previous < "$UPDATE_CHECK_FILE" || true
+  fi
+  [[ "$checked" =~ ^[0-9]+$ ]] || checked=0
+  (( now - checked < UPDATE_CHECK_INTERVAL )) && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+
+  (
+    latest="$(curl -fsS --max-time 5 -H 'Accept: application/vnd.github+json' "$UPDATE_CHECK_URL" |
+      grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 |
+      sed 's/.*"v\{0,1\}\([^"]*\)"$/\1/')" || latest=""
+    # Keep the last known answer when GitHub cannot be reached.
+    [[ "$latest" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || latest="$previous"
+    printf '%s %s\n' "$now" "$latest" > "${UPDATE_CHECK_FILE}.tmp.$$"
+    mv "${UPDATE_CHECK_FILE}.tmp.$$" "$UPDATE_CHECK_FILE"
+  ) >/dev/null 2>&1 &
+}
+
+print_update_notice() {
+  local latest="" installed image newest
+  if [[ -f "$UPDATE_CHECK_FILE" ]]; then
+    read -r _ latest < "$UPDATE_CHECK_FILE" || true
+  fi
+  [[ -n "$latest" ]] || return 0
+
+  image="$(configured_image)"
+  installed="$(docker image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image" 2>/dev/null)" || return 0
+  [[ -n "$installed" && "$installed" != "$latest" ]] || return 0
+
+  # Only announce versions newer than the installed one (edge may be ahead).
+  newest="$(printf '%s\n%s\n' "$installed" "$latest" | sort -V | tail -n 1)"
+  [[ "$newest" == "$latest" ]] || return 0
+
+  printf 'A new stable version of OpenClaw NAS Docker is available: %s (installed: %s).\n' \
+    "$latest" "$installed" >&2
+  if [[ "$image" != "$DEFAULT_IMAGE" ]]; then
+    printf 'Your .env pins OPENCLAW_IMAGE=%s. Clear it to follow the stable channel, then run: ./openclaw update\n\n' \
+      "$image" >&2
+  else
+    printf 'To install it, run: ./openclaw update\n\n' >&2
+  fi
+}
+
+check_for_update() {
+  [[ -t 2 ]] || return 0
+  update_check_disabled && return 0
+  command -v docker >/dev/null 2>&1 || return 0
+  print_update_notice || true
+  refresh_update_cache || true
+}
+
 normalize_legacy_image_override() {
   local current version backup_file temp_file
 
@@ -339,6 +415,11 @@ cmd_pip() {
 main() {
   local command="${1:-help}"
   [[ $# -gt 0 ]] && shift || true
+
+  case "$command" in
+    help|-h|--help|update|__update_after_sync|update-version) ;;
+    *) check_for_update ;;
+  esac
 
   case "$command" in
     onboard) cmd_onboard "$@" ;;
