@@ -37,6 +37,10 @@ export COMPOSE_PROJECT_NAME="$PROJECT"
 export OPENCLAW_BACKUP_ROOT="${RUNNER_TEMP:-/tmp}/openclaw-smoke-backups"
 OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
 export OPENCLAW_GATEWAY_TOKEN
+# Claves de proveedor ficticias para comprobar entrypoint.sh: una con valor
+# debe llegar al contenedor y una vacía no debe existir.
+export GROQ_API_KEY="smoke-test-dummy"
+export COHERE_API_KEY=""
 
 compose() {
   docker compose -p "$PROJECT" "$@"
@@ -135,5 +139,30 @@ assert_not_degraded "candidata"
 
 echo "== Comprobando CLI de Claude Code =="
 compose exec -T openclaw-gateway claude --version
+compose --profile cli run --rm -T openclaw-cli claude --version
+
+echo "== Comprobando el paso de claves de proveedor =="
+for svc in gateway cli; do
+  if [[ "$svc" == "gateway" ]]; then
+    # Entorno del proceso del gateway (un `exec` no pasa por el entrypoint).
+    # shellcheck disable=SC2016  # se expande dentro del contenedor
+    env_dump="$(compose exec -T openclaw-gateway sh -c '
+      for p in /proc/[0-9]*; do
+        if tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "dist/index.js gateway"; then
+          tr "\0" "\n" < "$p/environ"; break
+        fi
+      done')"
+  else
+    env_dump="$(compose --profile cli run --rm -T openclaw-cli env)"
+  fi
+  grep -qx 'GROQ_API_KEY=smoke-test-dummy' <<<"$env_dump" ||
+    { echo "ERROR ($svc): GROQ_API_KEY no llega al contenedor."; exit 1; }
+  if grep -q '^COHERE_API_KEY=' <<<"$env_dump"; then
+    echo "ERROR ($svc): una clave vacía no debe exportarse."; exit 1
+  fi
+  if grep -q '^OPENCLAW_NAS_ENV_' <<<"$env_dump"; then
+    echo "ERROR ($svc): quedan variables OPENCLAW_NAS_ENV_ sin limpiar."; exit 1
+  fi
+done
 
 echo "Smoke test superado."

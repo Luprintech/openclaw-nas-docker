@@ -141,8 +141,7 @@ chmod +x install.sh
 ```
 
 Run it from the install folder and keep `install.sh` there: you will use it
-again if the IP or port changes. Do not run it as `bash <(curl ...)`, because
-that form cannot find the install folder.
+again if the IP or port changes.
 
 The installer:
 
@@ -202,12 +201,23 @@ grep OPENCLAW_GATEWAY_TOKEN .env
 ```
 
 Onboarding runs inside the container. Follow the prompts to choose your AI
-provider and enter its API key or sign in. **This is where providers are
-configured.**
+provider and enter its API key or sign in.
 
-The `.env` file contains empty entries such as `ANTHROPIC_API_KEY` or
-`OPENAI_API_KEY`, but the containers do not read them. Filling them in has no
-effect; use onboarding instead.
+You can also put provider keys in `.env` instead. The supported entries are
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
+`MISTRAL_API_KEY`, `GROQ_API_KEY` and `COHERE_API_KEY`. After editing `.env`,
+apply the change with:
+
+```bash
+./openclaw stop
+./openclaw start
+```
+
+Only non-empty values are passed to OpenClaw, so an empty entry never hides a
+key stored in OpenClaw's own `config/.env`. The gateway, the Claude Code CLI and
+the `./openclaw` commands see these keys; a raw `docker compose exec` does not.
+A non-empty `ANTHROPIC_API_KEY` makes Claude Code bill the API key instead of
+using your account login.
 
 ### 6. Pair your browser
 
@@ -362,7 +372,7 @@ Every image is published under several tags:
 | --- | --------------- | --------- |
 | `latest` (default) | Only after the version has been tested on a real Synology NAS | You want a stable NAS. `install.sh` and `docker-compose.yml` use it |
 | `edge` | As soon as a new OpenClaw version passes the automated tests | You want new versions early and can recover from a broken update |
-| `<version>` (e.g. `2026.11.6`) | Never; it always points to the same image | You want to refer to an exact build |
+| `<version>` (e.g. `2026.11.6`) | Never; it always points to the same image | You want to stay on an exact version |
 
 How a new OpenClaw version reaches `latest`:
 
@@ -401,10 +411,20 @@ To go back to `latest`, leave the value empty (`OPENCLAW_IMAGE=`) and run
 data migrations are not reversible, so restore the backup made before you
 switched (see [Backups and restoring](#backups-and-restoring)).
 
-> **Version pins:** `./openclaw update` resets an
-> `OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:<version>` value to
-> empty, so a GHCR version pin does not survive an update. Use `latest` or
-> `edge`.
+### Staying on an exact version
+
+Set the version in `.env` and update:
+
+```env
+OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:2026.11.6
+```
+
+`./openclaw update` keeps that version until you change it, and still runs the
+backup and migrations. Leave the value empty to follow `latest` again.
+
+Older installers wrote version pins that froze updates, so the first
+`./openclaw update` after this change clears a GHCR version pin once and records
+`OPENCLAW_IMAGE_PIN_MIGRATED=1` in `.env`. Pins you set after that are kept.
 
 ---
 
@@ -460,12 +480,11 @@ To restore a backup (for example after a failed update):
    OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:2026.11.5
    ```
 
-5. Start the stack with `./openclaw start` (not `update`, which would clear the
-   pin and migrate again) and check `./openclaw status`.
+5. Start the stack with `./openclaw start` and check `./openclaw status`.
 
 When everything works, you can delete `config.before-restore` and
-`workspace.before-restore`. Remove the pin and run `./openclaw update` again
-once a fixed version is on `latest`.
+`workspace.before-restore`. Once a fixed version is on `latest`, empty
+`OPENCLAW_IMAGE` and run `./openclaw update`.
 
 ---
 

@@ -78,7 +78,7 @@ load_env_file() {
   local line key raw_value value line_number
 
   if [[ ! -f "$ENV_FILE" ]]; then
-    fail "ENV_FILE" "file not found: $ENV_FILE" "Copy .env.example to .env and fill in required values."
+    fail "ENV_FILE" "file not found: $ENV_FILE" "Run ./install.sh <NAS_IP> to create it."
     exit 2
   fi
 
@@ -131,7 +131,7 @@ valid_port() {
 }
 
 validate_required() {
-  local token nas_ip host_bind https_mode proxy_bind http_port https_port allowed_origins tz
+  local token nas_ip host_bind https_mode proxy_bind https_port tz
 
   if ! env_has "OPENCLAW_GATEWAY_TOKEN"; then
     fail "OPENCLAW_GATEWAY_TOKEN" "missing" "Generate one and add it to .env: openssl rand -hex 32"
@@ -190,17 +190,6 @@ validate_required() {
     fail "OPENCLAW_HTTPS_PORT" "invalid port '$https_port'" "Use a free host HTTPS port, for example 8443."
   fi
 
-  allowed_origins="$(env_get OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS)"
-  if [[ -z "$allowed_origins" ]]; then
-    fail "OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS" "empty" "Run install.sh again or set a JSON array like [\"https://$(env_get NAS_IP):$(env_get OPENCLAW_HTTPS_PORT)\"]."
-  elif [[ "$allowed_origins" == *"*"* ]]; then
-    fail "OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS" "wildcard is not allowed" "Use explicit origins only, for example [\"https://$(env_get NAS_IP):$(env_get OPENCLAW_HTTPS_PORT)\"]."
-  elif [[ "$allowed_origins" == \[*\] ]]; then
-    ok "OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS=$allowed_origins"
-  else
-    fail "OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS" "must be a JSON array" "Use [\"https://$(env_get NAS_IP):$(env_get OPENCLAW_HTTPS_PORT)\"]."
-  fi
-
   tz="$(env_get TZ)"
   if [[ -z "$tz" ]]; then
     warn "TZ" "empty" "Set TZ=Europe/Madrid or your preferred IANA timezone."
@@ -219,19 +208,18 @@ validate_providers() {
     MISTRAL_API_KEY
     GROQ_API_KEY
     COHERE_API_KEY
-    OLLAMA_BASE_URL
   )
   local configured=0 provider value
 
   for provider in "${providers[@]}"; do
     value="$(env_get "$provider")"
-    [[ -n "$value" && "$value" != "http://localhost:11434" ]] && configured=$((configured + 1))
+    [[ -n "$value" ]] && configured=$((configured + 1))
   done
 
   if (( configured > 0 )); then
     ok "AI provider configuration present ($configured)"
   elif [[ "$STRICT_PROVIDERS" == "true" ]]; then
-    fail "AI_PROVIDER" "no provider configured" "Fill at least one provider key or set OLLAMA_BASE_URL."
+    fail "AI_PROVIDER" "no provider configured" "Fill at least one provider key in .env or configure one with ./openclaw onboard."
   else
     warn "AI_PROVIDER" "no provider configured" "Onboarding can still configure providers later."
   fi

@@ -15,9 +15,10 @@
 set -euo pipefail
 
 # Resolve working directory — works for both direct execution and curl|bash.
-# When piped (curl|bash), BASH_SOURCE[0] is /dev/stdin or -, so fall back to $PWD.
+# When piped (curl | bash) BASH_SOURCE[0] is /dev/stdin or -, and with process
+# substitution (bash <(curl ...)) it is /dev/fd/N. Use $PWD in those cases.
 _src="${BASH_SOURCE[0]:-$0}"
-if [[ "$_src" == "/dev/stdin" || "$_src" == "-" || "$_src" == /proc/* ]]; then
+if [[ "$_src" == "/dev/stdin" || "$_src" == "-" || "$_src" == /dev/fd/* || "$_src" == /proc/* ]]; then
   SCRIPT_DIR="$PWD"
 else
   SCRIPT_DIR="$(cd "$(dirname "$_src")" && pwd)"
@@ -503,6 +504,16 @@ services:
       # Keep Claude Code login, settings, memory and history across container
       # re-creation. Stored under ./config, which is already persisted.
       CLAUDE_CONFIG_DIR: /home/node/.openclaw/claude
+      # Provider API keys from .env. They are passed with a prefix so an empty
+      # value never hides a key stored in config/.env; entrypoint.sh exports
+      # only the non-empty ones under their real names.
+      OPENCLAW_NAS_ENV_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENCLAW_NAS_ENV_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENCLAW_NAS_ENV_GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENCLAW_NAS_ENV_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENCLAW_NAS_ENV_MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      OPENCLAW_NAS_ENV_GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENCLAW_NAS_ENV_COHERE_API_KEY: ${COHERE_API_KEY:-}
 
     volumes:
       - ./config:/home/node/.openclaw
@@ -522,6 +533,9 @@ services:
     image: ${OPENCLAW_IMAGE:-ghcr.io/luprintech/openclaw-nas-docker:latest}
     profiles:
       - cli
+    # Export the provider keys first (see entrypoint.sh), then hand over to
+    # the image's own entrypoint.
+    entrypoint: ["/home/node/entrypoint.sh", "tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]
     init: true
     networks:
       - openclaw-net
@@ -542,6 +556,16 @@ services:
       # Keep Claude Code login, settings, memory and history across container
       # re-creation. Stored under ./config, which is already persisted.
       CLAUDE_CONFIG_DIR: /home/node/.openclaw/claude
+      # Provider API keys from .env. They are passed with a prefix so an empty
+      # value never hides a key stored in config/.env; entrypoint.sh exports
+      # only the non-empty ones under their real names.
+      OPENCLAW_NAS_ENV_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENCLAW_NAS_ENV_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENCLAW_NAS_ENV_GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENCLAW_NAS_ENV_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENCLAW_NAS_ENV_MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      OPENCLAW_NAS_ENV_GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENCLAW_NAS_ENV_COHERE_API_KEY: ${COHERE_API_KEY:-}
 
     volumes:
       - ./config:/home/node/.openclaw
@@ -665,7 +689,7 @@ OpenClaw:
   claude                Open Claude Code interactive TUI
   message <args>        Send a message (e.g. message send --target foo --message "hi")
   agent <args>          Talk to the assistant (e.g. agent --message "hi")
-  update-version        Update local OpenClaw image version pins
+  update-version        Maintainers only (Git clone): bump .last-openclaw-version
   update                Pull repo changes, pull image, restart stack
   pip <args>            Run pip inside the gateway container (e.g. pip install requests)
 
@@ -717,9 +741,16 @@ normalize_legacy_image_override() {
   [[ -f ".env" ]] || return 0
 
   # docker-compose.yml follows the latest published image only while
-  # OPENCLAW_IMAGE is empty. A version-pinned reference to the official image
-  # (written by older installers or by the former migration) would freeze
-  # every future update, so it is cleared. Custom image names are kept.
+  # OPENCLAW_IMAGE is empty. Older installers wrote version pins that froze
+  # every future update:
+  #   - local image names (openclaw-nas-docker:...) cannot be pulled at all,
+  #     so they are always cleared;
+  #   - GHCR version pins are cleared once. OPENCLAW_IMAGE_PIN_MIGRATED=1
+  #     records that, so a pin the user sets afterwards is respected.
+  # Custom image names, :latest and :edge are kept.
+  local migrated=false
+  grep -q '^OPENCLAW_IMAGE_PIN_MIGRATED=1' .env && migrated=true
+
   current="$(sed -n 's/^OPENCLAW_IMAGE=//p' .env | head -n 1 | tr -d '\r')"
   case "$current" in
     openclaw-nas-docker:synology-*)
@@ -730,11 +761,16 @@ normalize_legacy_image_override() {
       ;;
     ghcr.io/luprintech/openclaw-nas-docker:202*)
       version="${current#ghcr.io/luprintech/openclaw-nas-docker:}"
+      [[ "$migrated" == "true" ]] && version=""
       ;;
     *)
-      return 0
+      version=""
       ;;
   esac
+
+  if [[ "$migrated" != "true" ]]; then
+    printf '\nOPENCLAW_IMAGE_PIN_MIGRATED=1\n' >> .env
+  fi
 
   [[ "$version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]] || return 0
 
@@ -806,7 +842,8 @@ cmd_update_after_sync() {
 }
 
 openclaw_cli() {
-  compose exec openclaw-gateway node dist/index.js "$@"
+  # Go through entrypoint.sh so the command sees the provider keys from .env.
+  compose exec openclaw-gateway /home/node/entrypoint.sh node dist/index.js "$@"
 }
 
 cmd_onboard() {
@@ -837,6 +874,12 @@ cmd_claude() {
   compose --profile cli run --rm -it openclaw-cli claude "$@"
 }
 
+cmd_update_version() {
+  [[ -x scripts/update-openclaw-version.sh ]] ||
+    error "update-version is a maintainer command that needs a Git clone of the repository. To update your NAS, run: ./openclaw update"
+  scripts/update-openclaw-version.sh "$@"
+}
+
 cmd_pip() {
   compose exec openclaw-gateway pip "$@"
 }
@@ -854,7 +897,7 @@ main() {
     claude) cmd_claude "$@" ;;
     message) openclaw_cli message "$@" ;;
     agent) openclaw_cli agent "$@" ;;
-    update-version) scripts/update-openclaw-version.sh "$@" ;;
+    update-version) cmd_update_version "$@" ;;
     update) cmd_update "$@" ;;
     __update_after_sync) cmd_update_after_sync "$@" ;;
     pip) cmd_pip "$@" ;;
@@ -985,7 +1028,11 @@ OPENCLAW_PROXY_BIND=
 OPENCLAW_HTTPS_PORT=
 OPENCLAW_HTTPS_MODE=
 OPENCLAW_IMAGE=
-# AI provider keys — configure at least one after install
+OPENCLAW_IMAGE_PIN_MIGRATED=1
+# Optional AI provider keys. Onboarding can configure providers instead.
+# After editing, apply them with: ./openclaw stop && ./openclaw start
+# A non-empty ANTHROPIC_API_KEY makes Claude Code use API billing instead of
+# an account login.
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 GEMINI_API_KEY=
@@ -993,7 +1040,6 @@ OPENROUTER_API_KEY=
 MISTRAL_API_KEY=
 GROQ_API_KEY=
 COHERE_API_KEY=
-OLLAMA_BASE_URL=http://localhost:11434
 ENV_EOF
     success "Created .env"
   else

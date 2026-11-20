@@ -145,8 +145,7 @@ chmod +x install.sh
 ```
 
 Ejecútalo desde la carpeta de instalación y deja `install.sh` ahí: lo
-necesitarás si cambia la IP o el puerto. No lo lances con `bash <(curl ...)`,
-porque de esa forma no encuentra la carpeta de instalación.
+necesitarás si cambia la IP o el puerto.
 
 El instalador:
 
@@ -206,12 +205,23 @@ grep OPENCLAW_GATEWAY_TOKEN .env
 ```
 
 El onboarding se ejecuta dentro del contenedor. Sigue las indicaciones para
-elegir tu proveedor de IA e introducir su clave de API o iniciar sesión. **Aquí
-es donde se configuran los proveedores.**
+elegir tu proveedor de IA e introducir su clave de API o iniciar sesión.
 
-El archivo `.env` tiene entradas vacías como `ANTHROPIC_API_KEY` u
-`OPENAI_API_KEY`, pero los contenedores no las leen. Rellenarlas no tiene
-ningún efecto; usa el onboarding.
+También puedes poner las claves de los proveedores en `.env`. Las entradas
+admitidas son `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY` y `COHERE_API_KEY`.
+Después de editar `.env`, aplica el cambio con:
+
+```bash
+./openclaw stop
+./openclaw start
+```
+
+Solo se pasan a OpenClaw los valores que no están vacíos, así que una entrada
+vacía nunca tapa una clave guardada en el `config/.env` propio de OpenClaw. El
+gateway, Claude Code CLI y los comandos `./openclaw` ven estas claves; un
+`docker compose exec` directo no. Si `ANTHROPIC_API_KEY` tiene valor, Claude
+Code cobra con esa clave de API en lugar de usar el login de tu cuenta.
 
 ### 6. Empareja tu navegador
 
@@ -369,7 +379,7 @@ Cada imagen se publica con varias etiquetas:
 | -------- | ------------- | -------- |
 | `latest` (por defecto) | Solo después de probar la versión en un NAS Synology real | Quieres un NAS estable. Es la que usan `install.sh` y `docker-compose.yml` |
 | `edge` | En cuanto una versión nueva de OpenClaw pasa las pruebas automáticas | Quieres las versiones nuevas antes y sabes recuperarte de una actualización fallida |
-| `<versión>` (p. ej. `2026.11.6`) | Nunca; siempre apunta a la misma imagen | Quieres referirte a una compilación concreta |
+| `<versión>` (p. ej. `2026.11.6`) | Nunca; siempre apunta a la misma imagen | Quieres quedarte en una versión concreta |
 
 Cómo llega una versión nueva de OpenClaw a `latest`:
 
@@ -412,10 +422,23 @@ versión anterior: las migraciones de datos no se pueden deshacer, así que
 restaura la copia de seguridad que se hizo antes del cambio (ver
 [Copias de seguridad y restauración](#copias-de-seguridad-y-restauración)).
 
-> **Fijar una versión:** `./openclaw update` vacía el valor
-> `OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:<versión>`, así que
-> fijar una versión de GHCR no sobrevive a una actualización. Usa `latest` o
-> `edge`.
+### Quedarse en una versión concreta
+
+Pon la versión en `.env` y actualiza:
+
+```env
+OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:2026.11.6
+```
+
+`./openclaw update` mantiene esa versión hasta que la cambies, y sigue haciendo
+la copia de seguridad y las migraciones. Deja el valor vacío para volver a
+seguir `latest`.
+
+Los instaladores antiguos escribían versiones fijadas que bloqueaban las
+actualizaciones, así que el primer `./openclaw update` después de este cambio
+vacía una vez la versión de GHCR fijada y anota
+`OPENCLAW_IMAGE_PIN_MIGRATED=1` en `.env`. Las versiones que fijes después se
+respetan.
 
 ---
 
@@ -472,12 +495,11 @@ Para restaurar una copia (por ejemplo, después de una actualización fallida):
    OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:2026.11.5
    ```
 
-5. Arranca con `./openclaw start` (no con `update`, que borraría la versión
-   fijada y volvería a migrar) y comprueba `./openclaw status`.
+5. Arranca con `./openclaw start` y comprueba `./openclaw status`.
 
 Cuando todo funcione, puedes borrar `config.before-restore` y
-`workspace.before-restore`. Quita la versión fijada y vuelve a ejecutar
-`./openclaw update` cuando haya una versión corregida en `latest`.
+`workspace.before-restore`. Cuando haya una versión corregida en `latest`, deja
+vacío `OPENCLAW_IMAGE` y ejecuta `./openclaw update`.
 
 ---
 
