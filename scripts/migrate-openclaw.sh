@@ -17,6 +17,8 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
 BACKUP_ROOT="${OPENCLAW_BACKUP_ROOT:-$PROJECT_DIR}"
+# Backups kept after a successful update, the new one included. 0 keeps all.
+KEEP_BACKUPS="${OPENCLAW_KEEP_BACKUPS:-2}"
 # Seconds to wait for a clean gateway shutdown before Docker kills it.
 STOP_TIMEOUT="${OPENCLAW_STOP_TIMEOUT:-90}"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
@@ -135,6 +137,30 @@ prune_logs() {
   [[ -e "${logs[0]}" ]] || return 0
   local extra=$((${#logs[@]} - 10))
   (( extra > 0 )) && rm -f "${logs[@]:0:extra}"
+  return 0
+}
+
+# Keep the most recent backups after a successful update. Only folders that
+# match the exact name the updater creates are touched, and a failed update
+# never gets here, so the backup taken before it is always kept.
+prune_backups() {
+  [[ "$KEEP_BACKUPS" =~ ^[0-9]+$ ]] || { warn "OPENCLAW_KEEP_BACKUPS must be a number; no backups were removed."; return 0; }
+  (( KEEP_BACKUPS > 0 )) || return 0
+
+  local d backups=()
+  for d in "$BACKUP_ROOT"/openclaw-backup-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+    [[ -d "$d" && ! -L "$d" ]] && backups+=("$d")
+  done
+
+  local extra=$((${#backups[@]} - KEEP_BACKUPS))
+  (( extra > 0 )) || return 0
+  for d in "${backups[@]:0:extra}"; do
+    if rm -rf -- "$d"; then
+      [[ -n "$LOG_FILE" ]] && printf 'Removed old backup: %s\n' "$d" >> "$LOG_FILE"
+    else
+      warn "Could not remove the old backup $d; delete it by hand."
+    fi
+  done
   return 0
 }
 
@@ -375,6 +401,7 @@ upgrade() {
   run_step "Stopping OpenClaw" stop_gateway
   run_step "Updating your data (can take several minutes)" migrate_state
   run_step "Starting OpenClaw" configure_proxy
+  prune_backups
   print_summary
   prune_logs
 }

@@ -415,8 +415,9 @@ docker compose ps
 docker compose logs --since 5m --tail=120 openclaw-gateway
 ```
 
-El actualizador nunca borra las copias de seguridad ni restaura datos por su
-cuenta, así conservas la información y decides tú qué hacer.
+El actualizador nunca restaura datos por su cuenta, y una actualización que
+falla nunca borra ninguna copia de seguridad, así conservas la información y
+decides tú qué hacer.
 
 En Synology, el log de la actualización puede contener
 `EPERM: operation not permitted, fchmod` del doctor de OpenClaw. Es inofensivo
@@ -530,10 +531,14 @@ openclaw-backup-AAAAMMDD-HHMMSS/
 └── nginx/
 ```
 
-Si quieres guardarlas en otro sitio, define `OPENCLAW_BACKUP_ROOT` antes de
-actualizar. Las copias contienen tu token del gateway, las claves de los
-proveedores y el login de Claude en texto plano: guárdalas en privado y borra
-las antiguas que ya no necesites.
+Después de una actualización **correcta** solo se conservan las dos copias más
+recientes (la nueva y la anterior); las más antiguas se borran. Para conservar
+más, define `OPENCLAW_KEEP_BACKUPS` antes de actualizar, por ejemplo
+`OPENCLAW_KEEP_BACKUPS=5 ./openclaw update` (`0` las conserva todas). Si
+quieres guardarlas en otro sitio, define `OPENCLAW_BACKUP_ROOT`.
+
+Las copias contienen tu token del gateway, las claves de los proveedores y el
+login de Claude en texto plano: guárdalas en privado.
 
 Para restaurar una copia (por ejemplo, después de una actualización fallida):
 
