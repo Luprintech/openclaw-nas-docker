@@ -1,0 +1,151 @@
+name: Promote to stable
+
+# Mueve :latest a una versión ya publicada, sin reconstruir la imagen:
+# el digest de :latest pasa a ser exactamente el que se probó en el NAS.
+# Sirve también para hacer rollback: basta con indicar una versión anterior.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión a promocionar a :latest (por ejemplo 2026.11.6)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
+concurrency:
+  group: promote-stable
+  cancel-in-progress: false
+
+env:
+  GHCR_IMAGE: ghcr.io/luprintech/openclaw-nas-docker
+  DOCKERHUB_IMAGE: luprintechdev/openclaw-nas-docker
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment:
+      name: stable
+      url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ inputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${VERSION#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: '${VERSION}' no tiene formato de versión (AAAA.M.D)."
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check that the candidate exists
+        run: |
+          digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
+
+          GHCR_DIGEST="$(digest "${GHCR_IMAGE}:${VERSION}")" ||
+            { echo "ERROR: ${GHCR_IMAGE}:${VERSION} no existe."; exit 1; }
+          HUB_DIGEST="$(digest "${DOCKERHUB_IMAGE}:${VERSION}")" ||
+            { echo "ERROR: ${DOCKERHUB_IMAGE}:${VERSION} no existe."; exit 1; }
+          PREVIOUS_DIGEST="$(digest "${GHCR_IMAGE}:latest" 2>/dev/null || echo none)"
+
+          echo "GHCR ${VERSION}:       ${GHCR_DIGEST}"
+          echo "Docker Hub ${VERSION}: ${HUB_DIGEST}"
+          echo "GHCR latest actual:   ${PREVIOUS_DIGEST}"
+
+          {
+            echo "GHCR_DIGEST=$GHCR_DIGEST"
+            echo "HUB_DIGEST=$HUB_DIGEST"
+            echo "PREVIOUS_DIGEST=$PREVIOUS_DIGEST"
+          } >> "$GITHUB_ENV"
+
+      - name: Retag as latest
+        run: |
+          docker buildx imagetools create --tag "${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:${VERSION}"
+          docker buildx imagetools create --tag "${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:${VERSION}"
+
+      - name: Verify latest digest
+        run: |
+          digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
+
+          NEW_GHCR="$(digest "${GHCR_IMAGE}:latest")"
+          NEW_HUB="$(digest "${DOCKERHUB_IMAGE}:latest")"
+          [[ "$NEW_GHCR" == "$GHCR_DIGEST" ]] ||
+            { echo "ERROR: GHCR latest = ${NEW_GHCR}, esperado ${GHCR_DIGEST}"; exit 1; }
+          [[ "$NEW_HUB" == "$HUB_DIGEST" ]] ||
+            { echo "ERROR: Docker Hub latest = ${NEW_HUB}, esperado ${HUB_DIGEST}"; exit 1; }
+          echo "latest apunta a ${VERSION} en ambos registros."
+
+      - name: Mark GitHub release as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${VERSION}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --prerelease=false --latest
+            # Quita el aviso de candidata de las notas.
+            gh release view "$TAG" --json body --jq .body |
+              grep -v '^> \*\*Release candidate\.\*\*' > notes.md || true
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            cat > notes.md << EOF
+          OpenClaw NAS Docker ${TAG}
+
+          ## Docker images
+
+              ghcr.io/luprintech/openclaw-nas-docker:${VERSION}
+              luprintechdev/openclaw-nas-docker:${VERSION}
+
+          See [README](https://github.com/luprintech/openclaw-nas-docker#readme) for full setup instructions.
+          EOF
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --latest
+          fi
+
+      - name: Close validation issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue list --state open --label release-candidate \
+            --search "\"OpenClaw ${VERSION}\" in:title" --json number --jq '.[].number' |
+          while read -r ISSUE; do
+            gh issue close "$ISSUE" --reason completed \
+              --comment "Promocionada a \`:latest\` (digest \`${GHCR_DIGEST}\`). ${RUN_URL}"
+          done
+
+      - name: Summary
+        run: |
+          {
+            echo "## ${VERSION} promocionada a estable"
+            echo
+            echo "| | Digest |"
+            echo "|---|---|"
+            echo "| \`:latest\` anterior | \`${PREVIOUS_DIGEST}\` |"
+            echo "| \`:latest\` nuevo | \`${GHCR_DIGEST}\` |"
+            echo
+            echo "Rollback: vuelve a lanzar este workflow con la versión anterior."
+          } >> "$GITHUB_STEP_SUMMARY"
