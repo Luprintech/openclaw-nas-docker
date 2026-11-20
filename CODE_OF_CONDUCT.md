@@ -1,5 +1,7 @@
 # Code of Conduct
 
+**English** | [Español](CODE_OF_CONDUCT.es.md)
+
 ## Our pledge
 
 We want this project to be a welcoming and constructive place for everyone.
@@ -23,6 +25,9 @@ making OpenClaw on NAS safer and easier to run.
 ## Enforcement
 
 The repository owner may edit, reject, or remove contributions and may block
-participants who violate this code of conduct. Report concerns privately using
-the contact options on the repository owner's GitHub profile; do not publish
-sensitive reports in an issue or pull request.
+participants who violate this code of conduct.
+
+Report concerns privately through the repository's
+[private reporting form](https://github.com/Luprintech/openclaw-nas-docker/security/advisories/new)
+(Security tab → **Report a vulnerability**). Do not publish sensitive reports
+in an issue or pull request.

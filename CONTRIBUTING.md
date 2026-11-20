@@ -1,5 +1,7 @@
 # Contributing
 
+**English** | [Español](CONTRIBUTING.es.md)
+
 Thank you for improving OpenClaw on NAS. This project packages and operates
 OpenClaw for LAN-only Docker deployments, with Synology compatibility as a
 first-class requirement.
@@ -11,14 +13,16 @@ first-class requirement.
    `status:approved` label.
 3. Fork the repository and create a focused branch.
 4. Make one coherent change, validate it, and open a pull request to `main`.
+   `main` is protected: every change goes through a pull request and is merged
+   with squash.
 
 ## Before you open a pull request
 
 - Do not commit tokens, certificates, `.env` files, backups, or NAS-specific
   addresses.
 - Use a conventional commit message, for example `fix: repair certificate path`.
-- Update the README when installation, updates, security, or recovery behavior
-  changes.
+- Update the README (`README.md` and `README.es.md`) when installation,
+  updates, security, or recovery behavior changes.
 - Keep pull requests focused. Separate documentation-only changes from runtime
   behavior when practical.
 
@@ -28,10 +32,8 @@ Run these checks from the repository root:
 
 ```bash
 bash -n openclaw install.sh scripts/*.sh
-docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:stable \
-  /mnt/openclaw /mnt/install.sh \
-  /mnt/scripts/migrate-openclaw.sh \
-  /mnt/scripts/update-openclaw-version.sh
+docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
+  openclaw install.sh scripts/*.sh
 docker compose config --quiet
 ```
 
@@ -40,10 +42,14 @@ container image, describe the validation you performed in the PR. Synology
 changes should be tested on a clean installation and, when relevant, on an
 upgrade path.
 
+The wrapper is stored twice: in `openclaw` and embedded in `install.sh`. Keep
+both copies identical.
+
 ## Pull request expectations
 
+- Fill in the pull request template.
 - Link the approved issue with `Closes #<number>` when applicable.
-- Select exactly one `type:*` label.
+- Select exactly one `type:*` label (`type:bug`, `type:chore` or `type:docs`).
 - Explain the user-visible behavior and the rollback or recovery path.
 - Include test output or concise manual validation steps.
 - Never add AI or co-author attribution trailers unless a maintainer explicitly
