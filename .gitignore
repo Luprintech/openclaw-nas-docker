@@ -8,3 +8,6 @@ workspace/
 remotion/node_modules/
 remotion/out/
 /docs
+logs/
+openclaw-backup-*/
+.update-download.*/

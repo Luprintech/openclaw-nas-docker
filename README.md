@@ -143,22 +143,30 @@ chmod +x install.sh
 Run it from the install folder and keep `install.sh` there: you will use it
 again if the IP or port changes.
 
-The installer:
+The installer shows one line per step:
 
-1. Checks that Docker and Docker Compose v2 are available.
-2. Creates `.env` with a random `OPENCLAW_GATEWAY_TOKEN`, your time zone and
-   the NAS IP.
-3. Generates a local certificate authority and an HTTPS certificate for the NAS
-   IP under `certs/`.
-4. Writes `docker-compose.yml`, `nginx/nginx.conf` and the `./openclaw` command
-   wrapper.
-5. Creates `config/` and `workspace/` and gives them to UID/GID 1000, the user
-   that runs OpenClaw inside the container.
-6. Downloads the image if it is not on the NAS yet and starts the stack.
-7. Applies the allowed Control UI origins and the reverse-proxy settings.
+```text
+[1/5] Checking requirements... done (1s)
+[2/5] Preparing files, configuration and HTTPS certificate... done (2s)
+[3/5] Downloading OpenClaw (the first time can take several minutes)... done (3m10s)
+[4/5] Starting OpenClaw... done (5s)
+[5/5] Configuring access... done (50s)
 
-When it finishes it prints the dashboard URL and the path of the root
-certificate.
+✓ OpenClaw is installed and running.
+```
+
+Behind those steps it checks Docker and Docker Compose v2, creates `.env` with
+a random `OPENCLAW_GATEWAY_TOKEN`, your time zone and the NAS IP, writes
+`docker-compose.yml`, `nginx/nginx.conf` and the `./openclaw` command, creates a
+local certificate authority and an HTTPS certificate with OpenSSL, gives
+`config/` and `workspace/` to UID/GID 1000 (the user that runs OpenClaw inside
+the container), starts the stack and applies the allowed origins and proxy
+settings. It never installs software on the NAS.
+
+When it finishes it prints the dashboard URL, the certificate to install on
+your devices and the next steps. The full output is saved in
+`logs/install-<date>.log`; run `OPENCLAW_VERBOSE=1 ./install.sh 192.168.1.50`
+to see it on screen instead.
 
 ### 3. Trust the local root certificate on each device
 
@@ -307,27 +315,47 @@ cd /volume1/docker/openclaw
 ./openclaw update
 ```
 
-The stack must be running. If you stopped it, run `./openclaw start` first.
+It shows one line per step and a summary:
 
-What `./openclaw update` does, in order:
+```text
+[1/6] Downloading the latest version of this stack... done (1s)
+[2/6] Downloading the OpenClaw image (can take a few minutes)... done (40s)
+[3/6] Backing up your data... done (5s)
+[4/6] Stopping OpenClaw... done (4s)
+[5/6] Updating your data (can take several minutes)... done (2m30s)
+[6/6] Starting OpenClaw... done (15s)
 
-1. Shows the updater banner and downloads the latest `install.sh`,
-   `docker-compose.yml`, `openclaw` and `scripts/migrate-openclaw.sh` from this
-   repository (or runs `git pull` if the folder is a Git clone).
-2. Pulls the configured image (`:latest` by default).
+✓ OpenClaw is up to date and running.
+  Version: OpenClaw 2026.11.6 (06afb10)
+  Open:    https://192.168.1.50:8443
+  Backup:  /volume1/docker/openclaw/openclaw-backup-20261120-111328
+  Log:     logs/update-20261120-111325.log
+```
+
+What each step does:
+
+1. Downloads the latest `install.sh`, `docker-compose.yml`, `openclaw` and
+   `scripts/migrate-openclaw.sh` from this repository (or runs `git pull` if
+   the folder is a Git clone). The files are checked before they replace the
+   current ones, so a failed download changes nothing.
+2. Pulls the configured image (`:latest` by default). If OpenClaw was stopped,
+   it is started first, because the backup is taken from it.
 3. Backs up your OpenClaw data, `.env`, `docker-compose.yml` and `nginx/` into
    a new `openclaw-backup-<date>-<time>` folder (see
    [Backups and restoring](#backups-and-restoring)).
-4. Stops the gateway, repairs file ownership, and runs the data migrations
-   required by the new OpenClaw version.
-5. Starts the gateway, waits until it is healthy (up to 2 minutes) and restarts
-   Nginx.
+4. Stops the gateway, giving it up to 90 seconds to shut down cleanly.
+5. Repairs file ownership and runs the data migrations required by the new
+   OpenClaw version (`openclaw doctor --fix --non-interactive` and the session
+   import).
+6. Starts the gateway, waits until it is healthy and restarts Nginx.
 
-When it finishes, check the result:
+The detailed output of every step goes to `logs/update-<date>.log` (the last
+ten are kept). Run `./openclaw update --verbose` to see it on screen instead.
 
-```bash
-./openclaw status
-```
+If OpenClaw doctor still has something for you to do, the summary lists it
+under **OpenClaw doctor recommends**. If a step reported a problem, the summary
+starts with **finished with N warning(s)** and lists them: wait a minute and run
+`./openclaw update` again.
 
 > **Do not update with `docker compose pull` and `up -d` alone.** That skips
 > the data migration: recent OpenClaw versions then start with a degraded agent
@@ -335,8 +363,9 @@ When it finishes, check the result:
 > not load. If that already happened, run
 > `bash scripts/migrate-openclaw.sh upgrade`.
 
-If an update fails, do not restart the gateway again and again. Keep the backup
-folder it printed and look at the logs:
+If an update fails, it stops at that step and prints the last lines of its log,
+the full log path and the backup folder. Do not restart the gateway again and
+again; read the log and check:
 
 ```bash
 docker compose ps
@@ -346,10 +375,10 @@ docker compose logs --since 5m --tail=120 openclaw-gateway
 The updater never deletes backups and never restores data on its own, so you
 keep the evidence and decide what to do.
 
-On Synology, `openclaw doctor --fix` can print
-`EPERM: operation not permitted, fchmod`. It is harmless only if the update
-finishes, the gateway log shows `gateway ready` and `./openclaw status` shows the
-gateway as `healthy`.
+On Synology, the update log can contain
+`EPERM: operation not permitted, fchmod` from OpenClaw doctor. It is harmless
+when the update ends with **✓ OpenClaw is up to date and running** and
+`./openclaw status` shows the gateway as `healthy`.
 
 > [!IMPORTANT]
 > **Installed before the Synology 2026.9.9 compatibility update?** Refresh the
@@ -604,10 +633,10 @@ From then on, `./openclaw update` keeps the wrapper up to date.
 
 ### `OpenClaw gateway container is not running; start the stack before updating`
 
-`./openclaw update` needs the gateway container to exist, because it backs up
-your data from it. This happens after `./openclaw stop` or if the container
-was deleted in Container Manager. Your data in `config/` and `workspace/` is
-safe. Start the stack and update again:
+Older versions of `./openclaw update` stop with this message when the stack is
+not running, for example after `./openclaw stop` or if the container was
+deleted in Container Manager. Current versions start it automatically. Your
+data in `config/` and `workspace/` is safe. Start the stack and update again:
 
 ```bash
 ./openclaw start
@@ -618,7 +647,7 @@ safe. Start the stack and update again:
 
 The gateway did not release its state lock before the migration started,
 usually because it was killed instead of stopping cleanly. The update then ends
-with `completed with N warning(s)` and the data migration may not have
+with `finished with N warning(s)` and the data migration may not have
 finished. Wait a minute and run the update again:
 
 ```bash
@@ -709,8 +738,9 @@ old IP. Re-run the installer with the new one:
 
 - Do not port-forward `8443` or `18789` from the router.
 - Keep `certs/` private, especially the certificate authority key.
-- Never share or commit `.env`, `config/` or `openclaw-backup-*` folders: they
-  contain your gateway token and logins.
+- Never share or commit `.env`, `config/`, `logs/` or `openclaw-backup-*`
+  folders: they contain your gateway token, logins and account details. Remove
+  anything private before pasting a log into an issue.
 - Install only OpenClaw skills and plugins you trust.
 
 The installer binds the gateway to `127.0.0.1` and Nginx to the NAS LAN IP, and

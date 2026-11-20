@@ -6,6 +6,9 @@
 # therefore be unable to copy or rewrite config files directly over SSH.  This
 # helper performs backups and migrations through Docker, which has access to
 # the bind mount through the daemon.
+#
+# `upgrade` shows one line per step and writes the detailed output to
+# logs/update-<date>.log. Set OPENCLAW_VERBOSE=1 to print everything instead.
 
 set -euo pipefail
 
@@ -16,30 +19,111 @@ cd "$PROJECT_DIR"
 BACKUP_ROOT="${OPENCLAW_BACKUP_ROOT:-$PROJECT_DIR}"
 # Seconds to wait for a clean gateway shutdown before Docker kills it.
 STOP_TIMEOUT="${OPENCLAW_STOP_TIMEOUT:-90}"
-WARNINGS=0
+VERBOSE="${OPENCLAW_VERBOSE:-0}"
+# The wrapper passes its log file and step counter so the update reads as one
+# numbered sequence.
+LOG_FILE="${OPENCLAW_UPDATE_LOG:-}"
+STEP_NUM="${OPENCLAW_UPDATE_STEP:-0}"
+STEP_TOTAL="${OPENCLAW_UPDATE_TOTAL:-4}"
+
+STATE_DIR="$(mktemp -d)"
+WARN_FILE="$STATE_DIR/warnings"
+: > "$WARN_FILE"
+trap 'rm -rf "$STATE_DIR"' EXIT
+
+if [[ -t 1 ]]; then
+  GREEN='\033[0;32m' RED='\033[0;31m' YELLOW='\033[1;33m' BOLD='\033[1m' NC='\033[0m'
+else
+  GREEN='' RED='' YELLOW='' BOLD='' NC=''
+fi
 
 error() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 1
 }
 
+# Warnings are collected in a file because steps run in a subshell.
 warn() {
   printf 'WARN: %s\n' "$1" >&2
-  WARNINGS=$((WARNINGS + 1))
+  printf '%s\n' "$1" >> "$WARN_FILE"
 }
 
-# Stop the gateway and report when Docker had to kill it: a killed gateway
-# leaves its state lock behind and doctor cannot enter maintenance.
-stop_gateway() {
-  local container exit_code
-  container="$(gateway_container)"
-  compose stop -t "$STOP_TIMEOUT" openclaw-gateway >/dev/null
-  [[ -n "$container" ]] || return 0
-  exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$container" 2>/dev/null || true)"
-  if [[ "$exit_code" == "137" ]]; then
-    warn "The gateway did not stop within ${STOP_TIMEOUT}s and was killed; its state lock may block the migration."
+warning_count() {
+  grep -c . "$WARN_FILE" 2>/dev/null || true
+}
+
+# ─── Step output ──────────────────────────────────────────────────────────────
+
+format_elapsed() {
+  local seconds="$1"
+  if (( seconds >= 60 )); then
+    printf '%dm%02ds' $((seconds / 60)) $((seconds % 60))
+  else
+    printf '%ds' "$seconds"
   fi
 }
+
+# run_step <label> <command...>: one status line instead of the full output.
+# Steps are never called as `run_step ... || handler`: inside an || list bash
+# ignores `set -e`, also in the background job, so a failing command would
+# not fail the step. The step calls its failure handler itself instead.
+run_step() {
+  local label="$1"
+  shift
+  STEP_NUM=$((STEP_NUM + 1))
+  local prefix="[$STEP_NUM/$STEP_TOTAL] $label"
+
+  if [[ "$VERBOSE" == "1" || -z "$LOG_FILE" ]]; then
+    printf '\n%b==> %s%b\n' "$BOLD" "$prefix" "$NC"
+    "$@"
+    return
+  fi
+
+  printf '\n==> %s\n' "$prefix" >> "$LOG_FILE"
+  local start=$SECONDS pid rc=0
+  "$@" < /dev/null >> "$LOG_FILE" 2>&1 &
+  pid=$!
+  if [[ -t 1 ]]; then
+    while kill -0 "$pid" 2>/dev/null; do
+      printf '\r%s... %s ' "$prefix" "$(format_elapsed $((SECONDS - start)))"
+      sleep 1
+    done
+  else
+    printf '%s... ' "$prefix"
+  fi
+  wait "$pid" || rc=$?
+
+  local took
+  took="$(format_elapsed $((SECONDS - start)))"
+  local result="${GREEN}done${NC}"
+  [[ "$rc" -eq 0 ]] || result="${RED}failed${NC}"
+  if [[ -t 1 ]]; then
+    printf '\r%s... %b (%s)   \n' "$prefix" "$result" "$took"
+  else
+    printf '%b (%s)\n' "$result" "$took"
+  fi
+  [[ "$rc" -eq 0 ]] || fail_update
+}
+
+setup_log() {
+  [[ "$VERBOSE" == "1" || -n "$LOG_FILE" ]] && return 0
+  mkdir -p logs
+  chmod 700 logs 2>/dev/null || true
+  LOG_FILE="logs/update-$(date +%Y%m%d-%H%M%S).log"
+  (umask 077 && : > "$LOG_FILE")
+}
+
+# Keep the ten most recent update logs. Names contain the date, so the glob is
+# already in chronological order.
+prune_logs() {
+  local logs=(logs/update-*.log)
+  [[ -e "${logs[0]}" ]] || return 0
+  local extra=$((${#logs[@]} - 10))
+  (( extra > 0 )) && rm -f "${logs[@]:0:extra}"
+  return 0
+}
+
+# ─── Docker helpers ───────────────────────────────────────────────────────────
 
 compose() {
   docker compose --profile https-local "$@"
@@ -51,6 +135,22 @@ gateway_container() {
 
 nginx_container() {
   compose ps -q nginx
+}
+
+# Stop the gateway and report when Docker had to kill it: a killed gateway
+# leaves its state lock behind and doctor cannot enter maintenance.
+stop_gateway() {
+  local container exit_code
+  container="$(gateway_container)"
+  compose stop -t "$STOP_TIMEOUT" openclaw-gateway
+  [[ -n "$container" ]] || return 0
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" == "true" ]]; then
+    error "The gateway is still running after the stop request; the migration was not started."
+  fi
+  exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$container" 2>/dev/null || true)"
+  if [[ "$exit_code" == "137" ]]; then
+    warn "The gateway did not stop within ${STOP_TIMEOUT}s and was killed; its state lock may block the migration."
+  fi
 }
 
 backup_state() {
@@ -75,6 +175,9 @@ patch_nginx_forwarded_headers() {
   fi
 }
 
+# Trust only the current Nginx container IP, and set gateway.mode=local when it
+# is unset: this stack always runs the gateway locally, and recent OpenClaw
+# releases refuse to start a gateway without a mode.
 configure_gateway_proxy() {
   local container proxy_ip
   container="$(nginx_container)"
@@ -82,8 +185,8 @@ configure_gateway_proxy() {
   proxy_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container")"
   [[ "$proxy_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || error "Could not determine Nginx container IP"
 
-  compose run --rm --no-deps -e "OPENCLAW_PROXY_IP=$proxy_ip" --entrypoint node openclaw-gateway -e \
-    'const fs=require("fs");const p="/home/node/.openclaw/openclaw.json";const c=JSON.parse(fs.readFileSync(p,"utf8"));c.gateway=c.gateway||{};c.gateway.trustedProxies=[process.env.OPENCLAW_PROXY_IP];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");console.log("trustedProxies:",JSON.stringify(c.gateway.trustedProxies));' \
+  compose run --rm -T --no-deps -e "OPENCLAW_PROXY_IP=$proxy_ip" --entrypoint node openclaw-gateway -e \
+    'const fs=require("fs");const p="/home/node/.openclaw/openclaw.json";const c=JSON.parse(fs.readFileSync(p,"utf8"));c.gateway=c.gateway||{};c.gateway.trustedProxies=[process.env.OPENCLAW_PROXY_IP];if(!c.gateway.mode){c.gateway.mode="local";console.log("gateway.mode: local");}fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");console.log("trustedProxies:",JSON.stringify(c.gateway.trustedProxies));' \
     OPENCLAW_PROXY_IP="$proxy_ip"
 }
 
@@ -91,7 +194,7 @@ repair_runtime_ownership() {
   # Older releases could leave persisted files owned by root. Restore the
   # runtime tree to the unprivileged node user so plugin installation can
   # safely apply its final file modes.
-  if compose run --rm --no-deps --user 0 \
+  if compose run --rm -T --no-deps --user 0 \
     --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add DAC_READ_SEARCH \
     --cap-add FOWNER \
     --entrypoint sh openclaw-gateway -lc \
@@ -104,7 +207,7 @@ repair_runtime_ownership() {
 
 normalize_legacy_config() {
   # shellcheck disable=SC2016 # Node code is intentionally passed as a literal argument.
-  compose run --rm --no-deps --entrypoint node openclaw-gateway -e '
+  compose run --rm -T --no-deps --entrypoint node openclaw-gateway -e '
     const fs = require("fs");
     const JSON5 = require("json5");
     const path = "/home/node/.openclaw/openclaw.json";
@@ -129,33 +232,33 @@ normalize_legacy_config() {
     remove(config.gateway && config.gateway.controlUi, "allowInsecureAuth", "gateway.controlUi.allowInsecureAuth");
     remove(config.gateway && config.gateway.tailscale, "resetOnExit", "gateway.tailscale.resetOnExit");
     remove(config.gateway && config.gateway.nodes, "denyCommands", "gateway.nodes.denyCommands");
+    // This stack always runs the gateway locally; set it before doctor runs so
+    // doctor does not report the gateway start as blocked.
+    config.gateway = config.gateway || {};
+    if (!config.gateway.mode) {
+      config.gateway.mode = "local";
+      console.log("Set gateway.mode to local.");
+    }
     fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
     if (repairedTrailingLiteral) console.log("Repaired a trailing literal backslash-n sequence.");
     console.log("Removed legacy config keys:", removed.length ? removed.join(", ") : "none");
   '
 }
 
-run_migrations() {
-  local container backup_dir
-  container="$(gateway_container)"
-  [[ -n "$container" ]] || error "OpenClaw gateway container is not available for backup"
-
-  backup_dir="$(backup_state "$container")"
-  printf 'Backup created: %s\n' "$backup_dir"
-
-  stop_gateway
+# State migrations. The gateway must already be stopped.
+migrate_state() {
   repair_runtime_ownership
   normalize_legacy_config
 
-  # --fix performs the general state migrations.  On NAS bind mounts it may
-  # report EPERM from fchmod after committing some migrations; the dedicated
-  # session import below is still required and has its own validation output.
-  compose run --rm --no-deps openclaw-gateway openclaw doctor --fix || \
-    warn "General doctor repair reported an error; continuing with session import."
+  # The non-interactive repair path is the one OpenClaw's own updater uses. On
+  # NAS bind mounts it may report EPERM from fchmod after committing some
+  # migrations; the dedicated session import below is still required.
+  compose run --rm -T --no-deps openclaw-gateway openclaw doctor --fix --non-interactive || \
+    warn "OpenClaw doctor reported an error while repairing your data."
 
-  compose run --rm --no-deps openclaw-gateway \
+  compose run --rm -T --no-deps openclaw-gateway \
     openclaw doctor --session-sqlite import --session-sqlite-all-agents --non-interactive || \
-    warn "Session SQLite import reported an error; continuing with gateway startup."
+    warn "The session import reported an error."
 }
 
 wait_for_gateway() {
@@ -169,31 +272,102 @@ wait_for_gateway() {
 
 configure_proxy() {
   patch_nginx_forwarded_headers
-  compose stop -t "$STOP_TIMEOUT" openclaw-gateway >/dev/null || true
+  compose stop -t "$STOP_TIMEOUT" openclaw-gateway || true
   configure_gateway_proxy
-  compose up -d openclaw-gateway >/dev/null
+  compose up -d openclaw-gateway
   wait_for_gateway
-  compose restart nginx >/dev/null
+  compose restart nginx
+}
+
+# ─── Commands ─────────────────────────────────────────────────────────────────
+
+# Plain output, used by the CI smoke test.
+run_migrations() {
+  local container backup_dir
+  container="$(gateway_container)"
+  [[ -n "$container" ]] || error "OpenClaw gateway container is not available for backup"
+
+  backup_dir="$(backup_state "$container")"
+  printf 'Backup created: %s\n' "$backup_dir"
+  stop_gateway
+  migrate_state
+}
+
+step_backup() {
+  backup_state "$1" > "$STATE_DIR/backup_dir"
+  printf 'Backup created: %s\n' "$(cat "$STATE_DIR/backup_dir")"
+}
+
+env_value() {
+  sed -n "s/^$1=//p" .env 2>/dev/null | head -n 1 | tr -d '\r[:space:]'
+}
+
+# The actions that OpenClaw doctor lists under "Fix now:" in the log.
+doctor_actions() {
+  [[ -n "$LOG_FILE" && -f "$LOG_FILE" ]] || return 0
+  awk '/^Fix now:/ {on=1; next} on && /^(Doctor:|│|└|┌|◇)/ {on=0} on' "$LOG_FILE" \
+    | sed 's/\x1b\[[0-9;]*m//g' | awk 'NF'
+}
+
+fail_update() {
+  local backup_dir=""
+  [[ -f "$STATE_DIR/backup_dir" ]] && backup_dir="$(cat "$STATE_DIR/backup_dir")"
+  printf '\n%b✗ The update did not finish.%b\n' "$RED" "$NC"
+  [[ -n "$backup_dir" ]] && printf '  Your data is backed up in: %s\n' "$backup_dir"
+  if [[ -n "$LOG_FILE" && -f "$LOG_FILE" ]]; then
+    printf '  Last lines of the log:\n\n'
+    tail -n 25 "$LOG_FILE" | sed 's/^/    /'
+    printf '\n  Full log: %s\n' "$LOG_FILE"
+  fi
+  printf '  Do not restart the gateway repeatedly. See "Troubleshooting" in the README.\n'
+  exit 1
+}
+
+print_summary() {
+  local version url backup_dir warnings actions
+  version="$(compose exec -T openclaw-gateway node dist/index.js --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+  url="https://$(env_value NAS_IP):$(env_value OPENCLAW_HTTPS_PORT)"
+  backup_dir="$(cat "$STATE_DIR/backup_dir" 2>/dev/null || true)"
+  warnings="$(warning_count)"
+
+  if [[ "$warnings" -gt 0 ]]; then
+    printf '\n%b! OpenClaw is running, but the update finished with %s warning(s):%b\n' "$YELLOW" "$warnings" "$NC"
+    sed 's/^/  - /' "$WARN_FILE"
+    printf '  Wait a minute and run ./openclaw update again. If the warnings persist, check the log.\n'
+  else
+    printf '\n%b✓ OpenClaw is up to date and running.%b\n' "$GREEN" "$NC"
+  fi
+
+  [[ -n "$version" ]] && printf '  Version: %s\n' "$version"
+  printf '  Open:    %s\n' "$url"
+  [[ -n "$backup_dir" ]] && printf '  Backup:  %s\n' "$backup_dir"
+  [[ -n "$LOG_FILE" ]] && printf '  Log:     %s\n' "$LOG_FILE"
+
+  actions="$(doctor_actions)"
+  if [[ -n "$actions" ]]; then
+    printf '\n%bOpenClaw doctor recommends:%b\n' "$BOLD" "$NC"
+    printf '%s\n' "$actions" | sed 's/^/  /'
+  fi
 }
 
 upgrade() {
   local container
   container="$(gateway_container)"
-  [[ -n "$container" ]] || error "OpenClaw gateway container is not running; start the stack before updating."
+  [[ -n "$container" ]] || error "OpenClaw gateway container is not running; start the stack with ./openclaw start, then run ./openclaw update again."
 
-  run_migrations
-  configure_proxy
-  if [[ "$WARNINGS" -gt 0 ]]; then
-    printf 'OpenClaw maintenance completed with %s warning(s). Check them above, then run ./openclaw update again; the data migration may not have finished.\n' "$WARNINGS"
-  else
-    printf 'OpenClaw maintenance completed. Verify with: docker compose ps\n'
-  fi
+  setup_log
+  run_step "Backing up your data" step_backup "$container"
+  run_step "Stopping OpenClaw" stop_gateway
+  run_step "Updating your data (can take several minutes)" migrate_state
+  run_step "Starting OpenClaw" configure_proxy
+  print_summary
+  prune_logs
 }
 
 case "${1:-upgrade}" in
   migrate)
-    # Solo migraciones de estado, sin tocar Nginx ni arrancar el gateway.
-    # Lo usa el smoke test de CI.
+    # State migrations only, without touching Nginx or starting the gateway.
+    # Used by the CI smoke test.
     run_migrations
     ;;
   configure-proxy)

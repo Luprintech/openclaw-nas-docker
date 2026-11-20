@@ -37,6 +37,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
+if [[ ! -t 1 ]]; then
+  RED='' GREEN='' YELLOW='' BLUE='' BOLD='' NC=''
+fi
 
 # ─── Output helpers ───────────────────────────────────────────────────────────
 
@@ -51,7 +54,7 @@ print_banner() {
   echo "║  ╚██████╔╝██║     ███████╗██║ ╚████║╚██████╗███████╗██║  ██║╚███╔███╔╝  ║"
   echo "║   ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝   ║"
   echo "║                                                                         ║"
-  echo "║                      NAS Docker Installer by Luprintech                  ║"
+  echo "║                   NAS Docker Installer by Luprintech                    ║"
   echo "║                                                                         ║"
   echo "╚═════════════════════════════════════════════════════════════════════════╝"
   printf '%b\n' "$NC"
@@ -67,12 +70,13 @@ Example:
   ./install.sh 192.168.1.50
 
 This installer:
-  1. Generates deployment files (docker-compose.yml, nginx.conf, openclaw wrapper).
-  2. Checks required tools.
-  3. Creates .env with a secure gateway token.
-  4. Generates local HTTPS certificates.
-  5. Validates the environment.
-  6. Starts the Docker Compose stack.
+  1. Checks Docker and Docker Compose v2.
+  2. Writes docker-compose.yml, nginx/nginx.conf, the ./openclaw command and .env.
+  3. Creates a local HTTPS certificate for the NAS IP.
+  4. Downloads and starts OpenClaw, then configures access.
+
+It shows one line per step. The detailed output goes to logs/install-<date>.log;
+set OPENCLAW_VERBOSE=1 to print everything instead.
 
 Operational commands after install:
   ./openclaw onboard
@@ -94,6 +98,98 @@ success() {
 
 warn() {
   printf '%b⚠ %s%b\n' "$YELLOW" "$1" "$NC"
+  [[ -n "${WARN_FILE:-}" ]] && printf '%s\n' "$1" >> "$WARN_FILE"
+  return 0
+}
+
+# Detail for the log only; not repeated in the final summary.
+note() {
+  printf '  %s\n' "$1"
+}
+
+VERBOSE="${OPENCLAW_VERBOSE:-0}"
+LOG_FILE=""
+WARN_FILE=""
+STEP_NUM=0
+STEP_TOTAL=5
+
+format_elapsed() {
+  local seconds="$1"
+  if (( seconds >= 60 )); then
+    printf '%dm%02ds' $((seconds / 60)) $((seconds % 60))
+  else
+    printf '%ds' "$seconds"
+  fi
+}
+
+setup_install_log() {
+  WARN_FILE="$(mktemp)"
+  trap 'rm -f "$WARN_FILE"' EXIT
+  [[ "$VERBOSE" == "1" ]] && return 0
+  mkdir -p logs
+  chmod 700 logs 2>/dev/null || true
+  LOG_FILE="logs/install-$(date +%Y%m%d-%H%M%S).log"
+  (umask 077 && : > "$LOG_FILE")
+}
+
+# Keep color codes out of the log: functions called from here see the local,
+# empty values.
+run_without_colors() {
+  local RED='' GREEN='' YELLOW='' BLUE='' BOLD='' NC=''
+  "$@"
+}
+
+# run_step <label> <command...>: one status line instead of the full output.
+# Steps are never called as `run_step ... || handler`: inside an || list bash
+# ignores `set -e`, also in the background job, so a failing command would
+# not fail the step. The step calls its failure handler itself instead.
+run_step() {
+  local label="$1"
+  shift
+  STEP_NUM=$((STEP_NUM + 1))
+  local prefix="[$STEP_NUM/$STEP_TOTAL] $label"
+
+  if [[ "$VERBOSE" == "1" || -z "$LOG_FILE" ]]; then
+    printf '\n%b==> %s%b\n' "$BLUE$BOLD" "$prefix" "$NC"
+    "$@"
+    return
+  fi
+
+  printf '\n==> %s\n' "$prefix" >> "$LOG_FILE"
+  local start=$SECONDS pid rc=0
+  run_without_colors "$@" < /dev/null >> "$LOG_FILE" 2>&1 &
+  pid=$!
+  if [[ -t 1 ]]; then
+    while kill -0 "$pid" 2>/dev/null; do
+      printf '\r%s... %s ' "$prefix" "$(format_elapsed $((SECONDS - start)))"
+      sleep 1
+    done
+  else
+    printf '%s... ' "$prefix"
+  fi
+  wait "$pid" || rc=$?
+
+  local took
+  took="$(format_elapsed $((SECONDS - start)))"
+  local result="${GREEN}done${NC}"
+  [[ "$rc" -eq 0 ]] || result="${RED}failed${NC}"
+  if [[ -t 1 ]]; then
+    printf '\r%s... %b (%s)   \n' "$prefix" "$result" "$took"
+  else
+    printf '%b (%s)\n' "$result" "$took"
+  fi
+  [[ "$rc" -eq 0 ]] || install_failed
+}
+
+install_failed() {
+  printf '\n%b✗ The installation did not finish.%b\n' "$RED" "$NC" >&2
+  if [[ -n "$LOG_FILE" && -f "$LOG_FILE" ]]; then
+    printf '  Last lines of the log:\n\n' >&2
+    tail -n 25 "$LOG_FILE" | sed 's/^/    /' >&2
+    printf '\n  Full log: %s\n' "$LOG_FILE" >&2
+  fi
+  printf '  Fix the problem above and run ./install.sh again. See "Troubleshooting" in the README.\n' >&2
+  exit 1
 }
 
 error() {
@@ -210,41 +306,6 @@ valid_port() {
 
 # ─── Certificate generation ───────────────────────────────────────────────────
 
-install_mkcert_if_missing() {
-  if command -v mkcert >/dev/null 2>&1; then
-    printf 'mkcert found: %s\n' "$(mkcert -version 2>/dev/null || echo installed)"
-    return
-  fi
-
-  printf 'mkcert not found. Attempting installation...\n'
-
-  if command -v brew >/dev/null 2>&1; then
-    brew install mkcert
-  elif command -v choco >/dev/null 2>&1; then
-    choco install mkcert -y
-  elif command -v winget >/dev/null 2>&1; then
-    winget install FiloSottile.mkcert
-  elif command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y libnss3-tools curl ca-certificates
-    local version="v1.4.4"
-    local arch
-    case "$(uname -m)" in
-      x86_64) arch="amd64" ;;
-      aarch64|arm64) arch="arm64" ;;
-      *) error "Unsupported architecture for mkcert auto-install: $(uname -m)" ;;
-    esac
-    curl -fsSL -o /tmp/mkcert "https://github.com/FiloSottile/mkcert/releases/download/${version}/mkcert-${version}-linux-${arch}"
-    sudo install -m 0755 /tmp/mkcert /usr/local/bin/mkcert
-    rm -f /tmp/mkcert
-  else
-    printf 'Cannot auto-install mkcert on this system. Will try OpenSSL fallback.\n' >&2
-    return 1
-  fi
-
-  command -v mkcert >/dev/null 2>&1 || return 1
-}
-
 run_mkcert_local() {
   local nas_ip="$1"
   shift
@@ -289,6 +350,14 @@ generate_with_openssl() {
   command -v openssl >/dev/null 2>&1 || error "Neither mkcert nor openssl is available. Install one of them first."
 
   mkdir -p "$CERTS_DIR"
+
+  # Installations created with mkcert keep their CA, so devices that already
+  # trust it do not need to install a new one.
+  if [[ ! -f "$ca_key" && -f "$CERTS_DIR/mkcert-ca/rootCA-key.pem" && -f "$CERTS_DIR/mkcert-ca/rootCA.pem" ]]; then
+    ca_key="$CERTS_DIR/mkcert-ca/rootCA-key.pem"
+    cp "$CERTS_DIR/mkcert-ca/rootCA.pem" "$ca_cert"
+    printf 'Reusing the existing mkcert root CA.\n'
+  fi
 
   if [[ ! -f "$ca_key" || ! -f "$ca_cert" ]]; then
     printf 'Creating local OpenClaw root CA with OpenSSL...\n'
@@ -339,6 +408,7 @@ EOF
     -in "$server_csr" \
     -CA "$ca_cert" \
     -CAkey "$ca_key" \
+    -CAserial "$ca_serial" \
     -CAcreateserial \
     -out "$server_cert" \
     -days 825 \
@@ -356,10 +426,8 @@ generate_https_certs_if_needed() {
   section "Generating local HTTPS certificates"
   mkdir -p "$CERTS_DIR"
 
-  if ! command -v mkcert >/dev/null 2>&1; then
-    install_mkcert_if_missing || true
-  fi
-
+  # mkcert is used only when it is already installed; the installer never
+  # installs software on the NAS. OpenSSL is the default.
   if command -v mkcert >/dev/null 2>&1; then
     printf 'mkcert found: %s\n' "$(mkcert -version 2>/dev/null || echo installed)"
     if ! run_mkcert_local "$nas_ip"; then
@@ -373,7 +441,7 @@ generate_https_certs_if_needed() {
 
   cp "$CERTS_DIR/rootCA.pem" "$CERTS_DIR/rootCA.cer"
   success "Generated local HTTPS certificates for $nas_ip"
-  warn "Install certs/rootCA.pem on every client device that will access https://$nas_ip"
+  note "Install certs/rootCA.pem (rootCA.cer on Windows) on every device that will open https://$nas_ip"
 }
 
 # ─── Environment validation ───────────────────────────────────────────────────
@@ -694,7 +762,7 @@ OpenClaw:
   message <args>        Send a message (e.g. message send --target foo --message "hi")
   agent <args>          Talk to the assistant (e.g. agent --message "hi")
   update-version        Maintainers only (Git clone): bump .last-openclaw-version
-  update                Pull repo changes, pull image, restart stack
+  update [--verbose]    Update the stack and the image, back up and migrate your data
   pip <args>            Run pip inside the gateway container (e.g. pip install requests)
 
 Stack:
@@ -796,7 +864,7 @@ normalize_legacy_image_override() {
 }
 
 print_update_banner() {
-  if [[ -t 1 ]]; then printf '[0;31m'; fi
+  if [[ -t 1 ]]; then printf '\033[0;31m'; fi
   echo "╔═════════════════════════════════════════════════════════════════════════╗"
   echo "║                                                                         ║"
   echo "║   ██████╗ ██████╗ ███████╗███╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗  ║"
@@ -809,29 +877,132 @@ print_update_banner() {
   echo "║                    NAS Docker Updater by Luprintech                     ║"
   echo "║                                                                         ║"
   echo "╚═════════════════════════════════════════════════════════════════════════╝"
-  if [[ -t 1 ]]; then printf '[0m'; fi
-  printf '
-'
+  if [[ -t 1 ]]; then printf '\033[0m'; fi
+  printf '\n'
 }
 
-cmd_update() {
-  print_update_banner
-  # The freshly downloaded wrapper re-enters below; do not print it twice.
-  export OPENCLAW_UPDATE_BANNER_SHOWN=1
+# ─── Update ───────────────────────────────────────────────────────────────────
+# `./openclaw update` prints one line per step and writes the detailed output to
+# logs/update-<date>.log. `./openclaw update --verbose` (or OPENCLAW_VERBOSE=1)
+# prints everything instead. scripts/migrate-openclaw.sh continues the same
+# numbered sequence.
+
+UPDATE_TOTAL_STEPS=6
+
+format_elapsed() {
+  local seconds="$1"
+  if (( seconds >= 60 )); then
+    printf '%dm%02ds' $((seconds / 60)) $((seconds % 60))
+  else
+    printf '%ds' "$seconds"
+  fi
+}
+
+# update_step <step> <label> <command...>
+# Steps are never called as `run_step ... || handler`: inside an || list bash
+# ignores `set -e`, also in the background job, so a failing command would
+# not fail the step. The step calls its failure handler itself instead.
+update_step() {
+  local step="$1" label="$2"
+  shift 2
+  local prefix="[$step/$UPDATE_TOTAL_STEPS] $label"
+
+  if [[ "${OPENCLAW_VERBOSE:-0}" == "1" ]]; then
+    printf '\n==> %s\n' "$prefix"
+    "$@"
+    return
+  fi
+
+  printf '\n==> %s\n' "$prefix" >> "$OPENCLAW_UPDATE_LOG"
+  local start=$SECONDS pid rc=0
+  "$@" < /dev/null >> "$OPENCLAW_UPDATE_LOG" 2>&1 &
+  pid=$!
+  if [[ -t 1 ]]; then
+    while kill -0 "$pid" 2>/dev/null; do
+      printf '\r%s... %s ' "$prefix" "$(format_elapsed $((SECONDS - start)))"
+      sleep 1
+    done
+  else
+    printf '%s... ' "$prefix"
+  fi
+  wait "$pid" || rc=$?
+
+  local took
+  took="$(format_elapsed $((SECONDS - start)))"
+  local result="done"
+  [[ "$rc" -eq 0 ]] || result="failed"
+  if [[ -t 1 ]]; then
+    printf '\r%s... %s (%s)   \n' "$prefix" "$result" "$took"
+  else
+    printf '%s (%s)\n' "$result" "$took"
+  fi
+  [[ "$rc" -eq 0 ]] || update_failed
+}
+
+start_update_log() {
+  [[ "${OPENCLAW_VERBOSE:-0}" == "1" ]] && return 0
+  mkdir -p logs
+  chmod 700 logs 2>/dev/null || true
+  OPENCLAW_UPDATE_LOG="logs/update-$(date +%Y%m%d-%H%M%S).log"
+  (umask 077 && : > "$OPENCLAW_UPDATE_LOG")
+  export OPENCLAW_UPDATE_LOG
+}
+
+update_failed() {
+  printf '\nThe update stopped before changing your data.\n' >&2
+  if [[ -n "${OPENCLAW_UPDATE_LOG:-}" && -f "$OPENCLAW_UPDATE_LOG" ]]; then
+    printf 'Last lines of the log:\n\n' >&2
+    tail -n 20 "$OPENCLAW_UPDATE_LOG" | sed 's/^/    /' >&2
+    printf '\nFull log: %s\n' "$OPENCLAW_UPDATE_LOG" >&2
+  fi
+  exit 1
+}
+
+# Download every stack file first, check it, then replace the old files. The
+# running wrapper is replaced with mv, so this process keeps reading the old
+# file instead of a half-written one.
+sync_stack_files() {
   if [[ -d ".git" ]]; then
     command -v git >/dev/null 2>&1 || error "git is required to update a cloned repo"
     git pull --ff-only
-  else
-    printf 'Downloading latest stack files from GitHub...\n'
-    local base="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
-    curl -fsSL "$base/install.sh"        -o install.sh
-    curl -fsSL "$base/docker-compose.yml" -o docker-compose.yml
-    curl -fsSL "$base/openclaw"           -o openclaw
-    chmod +x openclaw
-    mkdir -p scripts
-    curl -fsSL "$base/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
-    printf 'Stack files updated.\n'
+    return
   fi
+
+  local base="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
+  local files=(install.sh docker-compose.yml openclaw scripts/migrate-openclaw.sh)
+  local tmp file
+  tmp="$(mktemp -d .update-download.XXXXXX)"
+
+  for file in "${files[@]}"; do
+    mkdir -p "$tmp/$(dirname "$file")"
+    if ! curl -fsSL "$base/$file" -o "$tmp/$file"; then
+      rm -rf "$tmp"
+      error "Could not download $file from GitHub. Check the NAS internet connection."
+    fi
+  done
+  for file in install.sh openclaw scripts/migrate-openclaw.sh; do
+    if ! bash -n "$tmp/$file"; then
+      rm -rf "$tmp"
+      error "The downloaded $file is not valid. Nothing was changed; try again later."
+    fi
+  done
+
+  chmod +x "$tmp/install.sh" "$tmp/openclaw" "$tmp/scripts/migrate-openclaw.sh"
+  mkdir -p scripts
+  for file in "${files[@]}"; do
+    mv -f "$tmp/$file" "$file"
+  done
+  rm -rf "$tmp"
+  printf 'Stack files updated.\n'
+}
+
+cmd_update() {
+  [[ "${1:-}" == "--verbose" ]] && export OPENCLAW_VERBOSE=1
+  print_update_banner
+  # The freshly downloaded wrapper re-enters below; do not repeat the banner.
+  export OPENCLAW_UPDATE_BANNER_SHOWN=1
+  start_update_log
+  update_step 1 "Downloading the latest version of this stack" sync_stack_files
 
   # Re-enter the freshly downloaded wrapper so an older installed wrapper
   # still receives the migration workflow on its first update.
@@ -839,10 +1010,24 @@ cmd_update() {
 }
 
 cmd_update_after_sync() {
+  [[ "${1:-}" == "--verbose" ]] && export OPENCLAW_VERBOSE=1
   [[ -n "${OPENCLAW_UPDATE_BANNER_SHOWN:-}" ]] || print_update_banner
+  # An older wrapper downloaded the files without opening a log.
+  [[ -n "${OPENCLAW_UPDATE_LOG:-}" ]] || start_update_log
+
   normalize_legacy_image_override
-  compose --profile https-local pull
-  bash scripts/migrate-openclaw.sh upgrade
+  update_step 2 "Downloading the OpenClaw image (can take a few minutes)" \
+    compose --profile https-local pull --quiet
+
+  # The backup is taken from the gateway container, so it must exist. Someone
+  # who runs update wants OpenClaw running: start it instead of failing.
+  if [[ -z "$(compose --profile https-local ps -aq openclaw-gateway 2>/dev/null)" ]]; then
+    printf 'OpenClaw was not running; starting it before updating.\n'
+    compose_up >> "${OPENCLAW_UPDATE_LOG:-/dev/null}" 2>&1 || update_failed
+  fi
+
+  OPENCLAW_UPDATE_STEP=2 OPENCLAW_UPDATE_TOTAL="$UPDATE_TOTAL_STEPS" \
+    bash scripts/migrate-openclaw.sh upgrade
 }
 
 openclaw_cli() {
@@ -993,21 +1178,19 @@ prepare_runtime_dirs() {
   if chmod -R u+rwX config workspace 2>/dev/null; then
     success "Adjusted OpenClaw runtime directory permissions"
   else
-    warn "Could not chmod config/workspace as current user"
+    note "Could not chmod config/workspace as the current user; Docker repairs it next."
   fi
 
   if chown -R 1000:1000 config workspace 2>/dev/null; then
     success "Adjusted config/workspace ownership to UID/GID 1000"
   else
-    warn "Could not chown config/workspace automatically"
-    warn "If OpenClaw sees EACCES, run: sudo chown -R 1000:1000 config workspace && sudo chmod -R u+rwX config workspace"
+    note "Could not chown config/workspace as the current user; Docker repairs it next."
   fi
 
   if chmod -R u+rwX certs 2>/dev/null; then
     success "Adjusted certificate directory permissions"
   else
-    warn "Could not chmod certs as current user"
-    warn "If certificate generation fails, run: sudo chown -R $(id -u):$(id -g) certs && chmod -R u+rwX certs"
+    note "Could not chmod certs as the current user."
   fi
 
   success "Ensured ./config exists"
@@ -1127,6 +1310,7 @@ pre_configure_gateway() {
 }
 
 start_stack() {
+  repair_runtime_ownership
   section "Starting OpenClaw Docker stack"
   docker compose --profile https-local up -d
   success "Docker stack started"
@@ -1196,7 +1380,7 @@ configure_gateway() {
   if echo "$actual_origins" | grep -q "https://${nas_ip}"; then
     success "Gateway restarted and configuration is active"
   else
-    warn "Config was reset after restart — applying again"
+    note "Config was reset after restart; applying it again."
     docker compose exec -T openclaw-gateway \
       node dist/index.js config set gateway.controlUi.allowedOrigins "${allowed_origins}" 2>/dev/null || true
     sleep 3
@@ -1221,43 +1405,34 @@ ensure_migration_helper() {
 
 print_next_steps() {
   local nas_ip="$1"
-  local https_port
-  https_port="$(env_get OPENCLAW_HTTPS_PORT | tr -d '[:space:]')"
+  local https_port warnings
+  https_port="$(install_https_port)"
+  warnings="$(grep -c . "$WARN_FILE" 2>/dev/null || true)"
 
-  printf '\n%b' "$GREEN"
-  echo "╔══════════════════════════════════════════════════════════════╗"
-  echo "║                                                              ║"
-  echo "║             OpenClaw installed successfully!                 ║"
-  echo "║                                                              ║"
-  echo "╚══════════════════════════════════════════════════════════════╝"
-  printf '%b\n' "$NC"
+  if [[ "${warnings:-0}" -gt 0 ]]; then
+    printf '\n%b! OpenClaw is installed and running, with %s warning(s):%b\n' "$YELLOW" "$warnings" "$NC"
+    sed 's/^/  - /' "$WARN_FILE"
+  else
+    printf '\n%b✓ OpenClaw is installed and running.%b\n' "$GREEN" "$NC"
+  fi
 
-  printf '%bAccess:%b\n' "$BOLD" "$NC"
-  printf '  HTTPS:        %bhttps://%s:%s%b\n' "$BLUE" "$nas_ip" "$https_port" "$NC"
+  printf '\n  Open: %bhttps://%s:%s%b\n' "$BOLD" "$nas_ip" "$https_port" "$NC"
 
-  printf '\n%bSetup:%b\n' "$BOLD" "$NC"
-  printf '  1. Install CA on every client device:\n'
-  printf '     %b%s/certs/rootCA.cer%b\n'              "$BLUE" "$SCRIPT_DIR" "$NC"
-  printf '  2. Run onboarding:\n'
-  printf '     %b./openclaw onboard%b\n'                "$BLUE" "$NC"
+  printf '\n%bNext steps%b\n' "$BOLD" "$NC"
+  printf '  1. Trust the certificate on every device that will open OpenClaw:\n'
+  printf '       Windows:                       %s/certs/rootCA.cer\n' "$SCRIPT_DIR"
+  printf '       macOS, iPhone, Android, Linux: %s/certs/rootCA.pem\n' "$SCRIPT_DIR"
+  printf '  2. Set up your AI provider:  %b./openclaw onboard%b\n' "$BLUE" "$NC"
+  printf '  3. Pair your browser:        %b./openclaw dashboard%b, then %b./openclaw devices%b and %b./openclaw approve <request_id>%b\n' \
+    "$BLUE" "$NC" "$BLUE" "$NC" "$BLUE" "$NC"
 
-  printf '\n%bCLI commands:%b\n' "$BOLD" "$NC"
-  printf '  Print dashboard/pairing URL:  %b./openclaw dashboard%b\n'            "$BLUE" "$NC"
-  printf '  List devices:                 %b./openclaw devices%b\n'              "$BLUE" "$NC"
-  printf '  Approve a pending device:     %b./openclaw approve <request_id>%b\n' "$BLUE" "$NC"
-  printf '  Check stack status:           %b./openclaw status%b\n'               "$BLUE" "$NC"
+  printf '\n%bEveryday commands%b\n' "$BOLD" "$NC"
+  printf '  %b./openclaw status%b   container status\n' "$BLUE" "$NC"
+  printf '  %b./openclaw update%b   update OpenClaw safely\n' "$BLUE" "$NC"
+  printf '  %b./openclaw help%b     all commands\n' "$BLUE" "$NC"
 
-  printf '\n%bDocker:%b\n' "$BOLD" "$NC"
-  printf '  View logs:    %bdocker compose logs -f openclaw-gateway%b\n'                               "$BLUE" "$NC"
-  printf '  Stop:         %bcd %s && docker compose down%b\n'                                          "$BLUE" "$SCRIPT_DIR" "$NC"
-  printf '  Start:        %bcd %s && docker compose --profile https-local up -d%b\n'                   "$BLUE" "$SCRIPT_DIR" "$NC"
-  printf '  Restart:      %bcd %s && docker compose restart openclaw-gateway%b\n'                      "$BLUE" "$SCRIPT_DIR" "$NC"
-
-  printf '\n%bDocumentation:%b  https://docs.openclaw.ai\n' "$BOLD" "$NC"
-  printf '%bSupport:%b        https://discord.gg/clawd\n'   "$BOLD" "$NC"
-
-  printf '\n%b  Do NOT port-forward this service publicly. Keep it LAN-only.%b\n' "$YELLOW" "$NC"
-  printf '\n%bHappy automating!%b\n\n' "$YELLOW" "$NC"
+  [[ -n "$LOG_FILE" ]] && printf '\n  Install log: %s\n' "$LOG_FILE"
+  printf '\n%bKeep OpenClaw LAN-only: do not port-forward it on your router.%b\n\n' "$YELLOW" "$NC"
 }
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
@@ -1303,31 +1478,46 @@ main() {
   nas_ip="$(detect_nas_ip "$NAS_IP_ARG")"
 
   print_banner
-  section "Installing OpenClaw for NAS Docker"
-  printf 'Target NAS IP: %s\n' "$nas_ip"
-  printf 'Access mode: HTTPS-only with bundled Nginx.\n'
-  printf 'Public exposure: disabled by design. Do not port-forward this panel.\n'
+  printf 'Installing OpenClaw on %s. Access will be HTTPS-only and limited to your LAN.\n' "$nas_ip"
 
-  generate_files_if_missing
-  check_tools
-  ensure_migration_helper
-  check_legacy_containers
-  prepare_runtime_dirs
-  prepare_env "$nas_ip"
-  repair_runtime_ownership
-  generate_https_certs_if_needed "$nas_ip"
-  validate_env_inline
-
-  local https_port
-  https_port="$(env_get OPENCLAW_HTTPS_PORT | tr -d '[:space:]')"
-  [[ -z "$https_port" ]] && https_port="$DEFAULT_HTTPS_PORT"
-
-  pre_configure_gateway "$nas_ip" "$https_port"
-  start_stack
-  configure_gateway "$nas_ip" "$https_port"
-  bash scripts/migrate-openclaw.sh configure-proxy
+  setup_install_log
+  run_step "Checking requirements" step_check
+  run_step "Preparing files, configuration and HTTPS certificate" step_prepare "$nas_ip"
+  run_step "Downloading OpenClaw (the first time can take several minutes)" step_download
+  run_step "Starting OpenClaw" start_stack
+  run_step "Configuring access" step_configure "$nas_ip"
 
   print_next_steps "$nas_ip"
+}
+
+install_https_port() {
+  local https_port
+  https_port="$(env_get OPENCLAW_HTTPS_PORT | tr -d '[:space:]')"
+  printf '%s\n' "${https_port:-$DEFAULT_HTTPS_PORT}"
+}
+
+step_check() {
+  check_tools
+  check_legacy_containers
+}
+
+step_prepare() {
+  generate_files_if_missing
+  ensure_migration_helper
+  prepare_runtime_dirs
+  prepare_env "$1"
+  generate_https_certs_if_needed "$1"
+  validate_env_inline
+  pre_configure_gateway "$1" "$(install_https_port)"
+}
+
+step_download() {
+  docker compose --profile https-local pull --quiet
+}
+
+step_configure() {
+  configure_gateway "$1" "$(install_https_port)"
+  bash scripts/migrate-openclaw.sh configure-proxy
 }
 
 main "$@"

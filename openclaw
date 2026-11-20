@@ -25,7 +25,7 @@ OpenClaw:
   message <args>        Send a message (e.g. message send --target foo --message "hi")
   agent <args>          Talk to the assistant (e.g. agent --message "hi")
   update-version        Maintainers only (Git clone): bump .last-openclaw-version
-  update                Pull repo changes, pull image, restart stack
+  update [--verbose]    Update the stack and the image, back up and migrate your data
   pip <args>            Run pip inside the gateway container (e.g. pip install requests)
 
 Stack:
@@ -127,7 +127,7 @@ normalize_legacy_image_override() {
 }
 
 print_update_banner() {
-  if [[ -t 1 ]]; then printf '[0;31m'; fi
+  if [[ -t 1 ]]; then printf '\033[0;31m'; fi
   echo "╔═════════════════════════════════════════════════════════════════════════╗"
   echo "║                                                                         ║"
   echo "║   ██████╗ ██████╗ ███████╗███╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗  ║"
@@ -140,29 +140,132 @@ print_update_banner() {
   echo "║                    NAS Docker Updater by Luprintech                     ║"
   echo "║                                                                         ║"
   echo "╚═════════════════════════════════════════════════════════════════════════╝"
-  if [[ -t 1 ]]; then printf '[0m'; fi
-  printf '
-'
+  if [[ -t 1 ]]; then printf '\033[0m'; fi
+  printf '\n'
 }
 
-cmd_update() {
-  print_update_banner
-  # The freshly downloaded wrapper re-enters below; do not print it twice.
-  export OPENCLAW_UPDATE_BANNER_SHOWN=1
+# ─── Update ───────────────────────────────────────────────────────────────────
+# `./openclaw update` prints one line per step and writes the detailed output to
+# logs/update-<date>.log. `./openclaw update --verbose` (or OPENCLAW_VERBOSE=1)
+# prints everything instead. scripts/migrate-openclaw.sh continues the same
+# numbered sequence.
+
+UPDATE_TOTAL_STEPS=6
+
+format_elapsed() {
+  local seconds="$1"
+  if (( seconds >= 60 )); then
+    printf '%dm%02ds' $((seconds / 60)) $((seconds % 60))
+  else
+    printf '%ds' "$seconds"
+  fi
+}
+
+# update_step <step> <label> <command...>
+# Steps are never called as `run_step ... || handler`: inside an || list bash
+# ignores `set -e`, also in the background job, so a failing command would
+# not fail the step. The step calls its failure handler itself instead.
+update_step() {
+  local step="$1" label="$2"
+  shift 2
+  local prefix="[$step/$UPDATE_TOTAL_STEPS] $label"
+
+  if [[ "${OPENCLAW_VERBOSE:-0}" == "1" ]]; then
+    printf '\n==> %s\n' "$prefix"
+    "$@"
+    return
+  fi
+
+  printf '\n==> %s\n' "$prefix" >> "$OPENCLAW_UPDATE_LOG"
+  local start=$SECONDS pid rc=0
+  "$@" < /dev/null >> "$OPENCLAW_UPDATE_LOG" 2>&1 &
+  pid=$!
+  if [[ -t 1 ]]; then
+    while kill -0 "$pid" 2>/dev/null; do
+      printf '\r%s... %s ' "$prefix" "$(format_elapsed $((SECONDS - start)))"
+      sleep 1
+    done
+  else
+    printf '%s... ' "$prefix"
+  fi
+  wait "$pid" || rc=$?
+
+  local took
+  took="$(format_elapsed $((SECONDS - start)))"
+  local result="done"
+  [[ "$rc" -eq 0 ]] || result="failed"
+  if [[ -t 1 ]]; then
+    printf '\r%s... %s (%s)   \n' "$prefix" "$result" "$took"
+  else
+    printf '%s (%s)\n' "$result" "$took"
+  fi
+  [[ "$rc" -eq 0 ]] || update_failed
+}
+
+start_update_log() {
+  [[ "${OPENCLAW_VERBOSE:-0}" == "1" ]] && return 0
+  mkdir -p logs
+  chmod 700 logs 2>/dev/null || true
+  OPENCLAW_UPDATE_LOG="logs/update-$(date +%Y%m%d-%H%M%S).log"
+  (umask 077 && : > "$OPENCLAW_UPDATE_LOG")
+  export OPENCLAW_UPDATE_LOG
+}
+
+update_failed() {
+  printf '\nThe update stopped before changing your data.\n' >&2
+  if [[ -n "${OPENCLAW_UPDATE_LOG:-}" && -f "$OPENCLAW_UPDATE_LOG" ]]; then
+    printf 'Last lines of the log:\n\n' >&2
+    tail -n 20 "$OPENCLAW_UPDATE_LOG" | sed 's/^/    /' >&2
+    printf '\nFull log: %s\n' "$OPENCLAW_UPDATE_LOG" >&2
+  fi
+  exit 1
+}
+
+# Download every stack file first, check it, then replace the old files. The
+# running wrapper is replaced with mv, so this process keeps reading the old
+# file instead of a half-written one.
+sync_stack_files() {
   if [[ -d ".git" ]]; then
     command -v git >/dev/null 2>&1 || error "git is required to update a cloned repo"
     git pull --ff-only
-  else
-    printf 'Downloading latest stack files from GitHub...\n'
-    local base="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
-    curl -fsSL "$base/install.sh"        -o install.sh
-    curl -fsSL "$base/docker-compose.yml" -o docker-compose.yml
-    curl -fsSL "$base/openclaw"           -o openclaw
-    chmod +x openclaw
-    mkdir -p scripts
-    curl -fsSL "$base/scripts/migrate-openclaw.sh" -o scripts/migrate-openclaw.sh
-    printf 'Stack files updated.\n'
+    return
   fi
+
+  local base="https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main"
+  local files=(install.sh docker-compose.yml openclaw scripts/migrate-openclaw.sh)
+  local tmp file
+  tmp="$(mktemp -d .update-download.XXXXXX)"
+
+  for file in "${files[@]}"; do
+    mkdir -p "$tmp/$(dirname "$file")"
+    if ! curl -fsSL "$base/$file" -o "$tmp/$file"; then
+      rm -rf "$tmp"
+      error "Could not download $file from GitHub. Check the NAS internet connection."
+    fi
+  done
+  for file in install.sh openclaw scripts/migrate-openclaw.sh; do
+    if ! bash -n "$tmp/$file"; then
+      rm -rf "$tmp"
+      error "The downloaded $file is not valid. Nothing was changed; try again later."
+    fi
+  done
+
+  chmod +x "$tmp/install.sh" "$tmp/openclaw" "$tmp/scripts/migrate-openclaw.sh"
+  mkdir -p scripts
+  for file in "${files[@]}"; do
+    mv -f "$tmp/$file" "$file"
+  done
+  rm -rf "$tmp"
+  printf 'Stack files updated.\n'
+}
+
+cmd_update() {
+  [[ "${1:-}" == "--verbose" ]] && export OPENCLAW_VERBOSE=1
+  print_update_banner
+  # The freshly downloaded wrapper re-enters below; do not repeat the banner.
+  export OPENCLAW_UPDATE_BANNER_SHOWN=1
+  start_update_log
+  update_step 1 "Downloading the latest version of this stack" sync_stack_files
 
   # Re-enter the freshly downloaded wrapper so an older installed wrapper
   # still receives the migration workflow on its first update.
@@ -170,10 +273,24 @@ cmd_update() {
 }
 
 cmd_update_after_sync() {
+  [[ "${1:-}" == "--verbose" ]] && export OPENCLAW_VERBOSE=1
   [[ -n "${OPENCLAW_UPDATE_BANNER_SHOWN:-}" ]] || print_update_banner
+  # An older wrapper downloaded the files without opening a log.
+  [[ -n "${OPENCLAW_UPDATE_LOG:-}" ]] || start_update_log
+
   normalize_legacy_image_override
-  compose --profile https-local pull
-  bash scripts/migrate-openclaw.sh upgrade
+  update_step 2 "Downloading the OpenClaw image (can take a few minutes)" \
+    compose --profile https-local pull --quiet
+
+  # The backup is taken from the gateway container, so it must exist. Someone
+  # who runs update wants OpenClaw running: start it instead of failing.
+  if [[ -z "$(compose --profile https-local ps -aq openclaw-gateway 2>/dev/null)" ]]; then
+    printf 'OpenClaw was not running; starting it before updating.\n'
+    compose_up >> "${OPENCLAW_UPDATE_LOG:-/dev/null}" 2>&1 || update_failed
+  fi
+
+  OPENCLAW_UPDATE_STEP=2 OPENCLAW_UPDATE_TOTAL="$UPDATE_TOTAL_STEPS" \
+    bash scripts/migrate-openclaw.sh upgrade
 }
 
 openclaw_cli() {
