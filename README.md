@@ -404,8 +404,8 @@ docker compose ps
 docker compose logs --since 5m --tail=120 openclaw-gateway
 ```
 
-The updater never deletes backups and never restores data on its own, so you
-keep the evidence and decide what to do.
+The updater never restores data on its own, and a failed update never deletes
+any backup, so you keep the evidence and decide what to do.
 
 On Synology, the update log can contain
 `EPERM: operation not permitted, fchmod` from OpenClaw doctor. It is harmless
@@ -512,9 +512,14 @@ openclaw-backup-YYYYMMDD-HHMMSS/
 └── nginx/
 ```
 
-Set `OPENCLAW_BACKUP_ROOT` before running the update to store them somewhere
-else. Backups contain your gateway token, provider keys and Claude login in
-plain text: keep them private and delete old ones you no longer need.
+After a **successful** update, only the two most recent backups are kept (the
+new one and the previous one); older ones are removed. To keep more, set
+`OPENCLAW_KEEP_BACKUPS` before running the update, for example
+`OPENCLAW_KEEP_BACKUPS=5 ./openclaw update` (`0` keeps all of them). Set
+`OPENCLAW_BACKUP_ROOT` to store them somewhere else.
+
+Backups contain your gateway token, provider keys and Claude login in plain
+text: keep them private.
 
 To restore a backup (for example after a failed update):
 
