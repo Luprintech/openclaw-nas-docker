@@ -15,3 +15,14 @@ updates:
         update-types:
           - minor
           - patch
+
+  # Image pinned by digest in the Dockerfile (uv). The OpenClaw base image uses
+  # a build argument and is updated by update-openclaw-version.yml instead.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - type:chore
+    commit-message:
+      prefix: chore

@@ -18,6 +18,11 @@
 #   3. Add bin/ directories to PATH so installed binaries are found.
 
 ARG OPENCLAW_VERSION=latest
+
+# uv comes from Astral's official image, pinned by version and digest, instead
+# of piping an unpinned install script into a shell. Dependabot updates it.
+FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
+
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}
 
 USER root
@@ -25,7 +30,10 @@ USER root
 # Install runtime dependencies for OpenClaw features and skills
 # Base tools: OAuth, networking, process management
 # Skill tools: ffmpeg (video-frames), tmux (tmux), jq (session-logs)
+# `apt-get upgrade` applies the Debian security fixes published since the
+# upstream base image was built.
 RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
@@ -52,11 +60,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     rm -rf /var/lib/apt/lists/*
 
 # Install uv (Python package manager) — needed for nano-pdf and other Python skills
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    test -f /root/.local/bin/uv   || { echo "uv binary not found after install"; exit 1; } && \
-    test -f /root/.local/bin/uvx  || { echo "uvx binary not found after install"; exit 1; } && \
-    ln -sf /root/.local/bin/uv  /usr/local/bin/uv && \
-    ln -sf /root/.local/bin/uvx /usr/local/bin/uvx
+COPY --from=uv /uv /uvx /usr/local/bin/
+RUN uv --version && uvx --version
 
 # Fix npm global install permissions
 RUN mkdir -p /home/node/.npm-global && \
