@@ -21,7 +21,7 @@ ARG OPENCLAW_VERSION=latest
 
 # uv comes from Astral's official image, pinned by version and digest, instead
 # of piping an unpinned install script into a shell. Dependabot updates it.
-FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d AS uv
 
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}
 
