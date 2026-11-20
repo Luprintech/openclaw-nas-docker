@@ -82,10 +82,17 @@ jobs:
             echo "PREVIOUS_DIGEST=$PREVIOUS_DIGEST"
           } >> "$GITHUB_ENV"
 
+      # `docker buildx imagetools create` envuelve una imagen de una sola
+      # plataforma en un índice nuevo, así que :latest acabaría con otro digest.
+      # skopeo copia el manifiesto tal cual y conserva el digest exacto.
+      # Usa las credenciales de ~/.docker/config.json que deja docker/login-action.
       - name: Retag as latest
         run: |
-          docker buildx imagetools create --tag "${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:${VERSION}"
-          docker buildx imagetools create --tag "${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:${VERSION}"
+          command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          skopeo copy --all --preserve-digests \
+            "docker://${GHCR_IMAGE}:${VERSION}" "docker://${GHCR_IMAGE}:latest"
+          skopeo copy --all --preserve-digests \
+            "docker://${DOCKERHUB_IMAGE}:${VERSION}" "docker://${DOCKERHUB_IMAGE}:latest"
 
       - name: Verify latest digest
         run: |
