@@ -12,6 +12,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Luprintech/openclaw-nas-docker/stargazers"><img src="https://img.shields.io/github/stars/Luprintech/openclaw-nas-docker?style=for-the-badge&logo=github&label=Star%20this%20repo&color=f5c518" alt="Star this repository on GitHub"/></a>
+</p>
+
+<p align="center">
   <img src="assets/openclaw-nas.png" alt="OpenClaw NAS Docker deployment" width="720"/>
 </p>
 
@@ -33,6 +37,11 @@ the image locally:
 GitHub Actions builds the image from `Dockerfile`, tests it and publishes it;
 `docker-compose.yml` only pulls and runs it.
 
+> [!TIP]
+> **Is this project useful to you?** ⭐ [Star it on GitHub](https://github.com/Luprintech/openclaw-nas-docker)
+> so other NAS users can find it. It takes one click and helps the project keep
+> going.
+
 ## Contents
 
 - [Requirements](#requirements)
@@ -48,6 +57,7 @@ GitHub Actions builds the image from `Dockerfile`, tests it and publishes it;
 - [Installing Python skills](#installing-python-skills)
 - [Troubleshooting](#troubleshooting)
 - [Security rules](#security-rules)
+- [Support the project](#support-the-project)
 - [Project documents](#project-documents)
 
 ---
@@ -211,7 +221,15 @@ grep OPENCLAW_GATEWAY_TOKEN .env
 Onboarding runs inside the container. Follow the prompts to choose your AI
 provider and enter its API key or sign in.
 
-You can also put provider keys in `.env` instead. The supported entries are
+**Add or change API keys from the browser.** Once your browser is paired
+(step 6), open the dashboard and go to **Settings → Models → Add account**.
+Paste the API key or sign in with the provider. OpenClaw checks the key right
+away, and **Test access** checks it again later. Changing model settings needs
+admin access in the dashboard. Keys saved this way are stored in OpenClaw's
+credential store inside `config/`, so they survive updates and are included in
+the update backups. This is the easiest option for most users.
+
+**Or put provider keys in `.env`**, which is handy for automation. The supported entries are
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
 `MISTRAL_API_KEY`, `GROQ_API_KEY` and `COHERE_API_KEY`. After editing `.env`,
 apply the change with:
@@ -747,6 +765,15 @@ The installer binds the gateway to `127.0.0.1` and Nginx to the NAS LAN IP, and
 configures Nginx to overwrite `X-Forwarded-For` with the real client address.
 It adds only the current Nginx container IP to `gateway.trustedProxies`, and
 `./openclaw update` refreshes it. Do not replace it with a broad Docker subnet.
+
+---
+
+## Support the project
+
+If OpenClaw on NAS saves you time, the best way to support it is to
+⭐ [star the repository](https://github.com/Luprintech/openclaw-nas-docker).
+Stars help other NAS users find it. Bug reports and pull requests are welcome
+too (see [Contributing](CONTRIBUTING.md)).
 
 ---
 
