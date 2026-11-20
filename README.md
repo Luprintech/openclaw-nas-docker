@@ -326,6 +326,20 @@ Run them from the install folder.
 
 ## Updating OpenClaw
 
+When a new stable version is available, any `./openclaw` command tells you:
+
+```text
+A new stable version of OpenClaw NAS Docker is available: 2026.11.7 (installed: 2026.11.6).
+To install it, run: ./openclaw update
+```
+
+Once a day, in the background, the wrapper asks the GitHub API for the latest
+stable release. It is a plain read-only request, like opening the releases page
+in a browser, and sends nothing about your installation. The check never slows
+down or fails a command. To turn it off, add `OPENCLAW_NO_UPDATE_CHECK=1` to `.env`.
+You can also click **Watch → Custom → Releases** on GitHub to get an email for
+every new version.
+
 Always update with:
 
 ```bash

@@ -11,3 +11,5 @@ remotion/out/
 logs/
 openclaw-backup-*/
 .update-download.*/
+.update-check
+.update-check.tmp.*
