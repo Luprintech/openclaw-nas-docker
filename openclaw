@@ -24,7 +24,7 @@ OpenClaw:
   claude                Open Claude Code interactive TUI
   message <args>        Send a message (e.g. message send --target foo --message "hi")
   agent <args>          Talk to the assistant (e.g. agent --message "hi")
-  update-version        Update local OpenClaw image version pins
+  update-version        Maintainers only (Git clone): bump .last-openclaw-version
   update                Pull repo changes, pull image, restart stack
   pip <args>            Run pip inside the gateway container (e.g. pip install requests)
 
@@ -76,9 +76,16 @@ normalize_legacy_image_override() {
   [[ -f ".env" ]] || return 0
 
   # docker-compose.yml follows the latest published image only while
-  # OPENCLAW_IMAGE is empty. A version-pinned reference to the official image
-  # (written by older installers or by the former migration) would freeze
-  # every future update, so it is cleared. Custom image names are kept.
+  # OPENCLAW_IMAGE is empty. Older installers wrote version pins that froze
+  # every future update:
+  #   - local image names (openclaw-nas-docker:...) cannot be pulled at all,
+  #     so they are always cleared;
+  #   - GHCR version pins are cleared once. OPENCLAW_IMAGE_PIN_MIGRATED=1
+  #     records that, so a pin the user sets afterwards is respected.
+  # Custom image names, :latest and :edge are kept.
+  local migrated=false
+  grep -q '^OPENCLAW_IMAGE_PIN_MIGRATED=1' .env && migrated=true
+
   current="$(sed -n 's/^OPENCLAW_IMAGE=//p' .env | head -n 1 | tr -d '\r')"
   case "$current" in
     openclaw-nas-docker:synology-*)
@@ -89,11 +96,16 @@ normalize_legacy_image_override() {
       ;;
     ghcr.io/luprintech/openclaw-nas-docker:202*)
       version="${current#ghcr.io/luprintech/openclaw-nas-docker:}"
+      [[ "$migrated" == "true" ]] && version=""
       ;;
     *)
-      return 0
+      version=""
       ;;
   esac
+
+  if [[ "$migrated" != "true" ]]; then
+    printf '\nOPENCLAW_IMAGE_PIN_MIGRATED=1\n' >> .env
+  fi
 
   [[ "$version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]] || return 0
 
@@ -165,7 +177,8 @@ cmd_update_after_sync() {
 }
 
 openclaw_cli() {
-  compose exec openclaw-gateway node dist/index.js "$@"
+  # Go through entrypoint.sh so the command sees the provider keys from .env.
+  compose exec openclaw-gateway /home/node/entrypoint.sh node dist/index.js "$@"
 }
 
 cmd_onboard() {
@@ -196,6 +209,12 @@ cmd_claude() {
   compose --profile cli run --rm -it openclaw-cli claude "$@"
 }
 
+cmd_update_version() {
+  [[ -x scripts/update-openclaw-version.sh ]] ||
+    error "update-version is a maintainer command that needs a Git clone of the repository. To update your NAS, run: ./openclaw update"
+  scripts/update-openclaw-version.sh "$@"
+}
+
 cmd_pip() {
   compose exec openclaw-gateway pip "$@"
 }
@@ -213,7 +232,7 @@ main() {
     claude) cmd_claude "$@" ;;
     message) openclaw_cli message "$@" ;;
     agent) openclaw_cli agent "$@" ;;
-    update-version) scripts/update-openclaw-version.sh "$@" ;;
+    update-version) cmd_update_version "$@" ;;
     update) cmd_update "$@" ;;
     __update_after_sync) cmd_update_after_sync "$@" ;;
     pip) cmd_pip "$@" ;;

@@ -52,6 +52,16 @@ services:
       # Keep Claude Code login, settings, memory and history across container
       # re-creation. Stored under ./config, which is already persisted.
       CLAUDE_CONFIG_DIR: /home/node/.openclaw/claude
+      # Provider API keys from .env. They are passed with a prefix so an empty
+      # value never hides a key stored in config/.env; entrypoint.sh exports
+      # only the non-empty ones under their real names.
+      OPENCLAW_NAS_ENV_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENCLAW_NAS_ENV_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENCLAW_NAS_ENV_GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENCLAW_NAS_ENV_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENCLAW_NAS_ENV_MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      OPENCLAW_NAS_ENV_GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENCLAW_NAS_ENV_COHERE_API_KEY: ${COHERE_API_KEY:-}
 
     volumes:
       - ./config:/home/node/.openclaw
@@ -71,6 +81,9 @@ services:
     image: ${OPENCLAW_IMAGE:-ghcr.io/luprintech/openclaw-nas-docker:latest}
     profiles:
       - cli
+    # Export the provider keys first (see entrypoint.sh), then hand over to
+    # the image's own entrypoint.
+    entrypoint: ["/home/node/entrypoint.sh", "tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]
     init: true
     networks:
       - openclaw-net
@@ -91,6 +104,16 @@ services:
       # Keep Claude Code login, settings, memory and history across container
       # re-creation. Stored under ./config, which is already persisted.
       CLAUDE_CONFIG_DIR: /home/node/.openclaw/claude
+      # Provider API keys from .env. They are passed with a prefix so an empty
+      # value never hides a key stored in config/.env; entrypoint.sh exports
+      # only the non-empty ones under their real names.
+      OPENCLAW_NAS_ENV_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENCLAW_NAS_ENV_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENCLAW_NAS_ENV_GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENCLAW_NAS_ENV_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENCLAW_NAS_ENV_MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      OPENCLAW_NAS_ENV_GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENCLAW_NAS_ENV_COHERE_API_KEY: ${COHERE_API_KEY:-}
 
     volumes:
       - ./config:/home/node/.openclaw
