@@ -755,7 +755,29 @@ normalize_legacy_image_override() {
     "$current" "$backup_file"
 }
 
+print_update_banner() {
+  if [[ -t 1 ]]; then printf '[0;31m'; fi
+  echo "╔═════════════════════════════════════════════════════════════════════════╗"
+  echo "║                                                                         ║"
+  echo "║   ██████╗ ██████╗ ███████╗███╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗  ║"
+  echo "║  ██╔═══██╗██╔══██╗██╔════╝████╗  ██║██╔════╝██║     ██╔══██╗██║    ██║  ║"
+  echo "║  ██║   ██║██████╔╝█████╗  ██╔██╗ ██║██║     ██║     ███████║██║ █╗ ██║  ║"
+  echo "║  ██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║██║     ██║     ██╔══██║██║███╗██║  ║"
+  echo "║  ╚██████╔╝██║     ███████╗██║ ╚████║╚██████╗███████╗██║  ██║╚███╔███╔╝  ║"
+  echo "║   ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝   ║"
+  echo "║                                                                         ║"
+  echo "║                    NAS Docker Updater by Luprintech                     ║"
+  echo "║                                                                         ║"
+  echo "╚═════════════════════════════════════════════════════════════════════════╝"
+  if [[ -t 1 ]]; then printf '[0m'; fi
+  printf '
+'
+}
+
 cmd_update() {
+  print_update_banner
+  # The freshly downloaded wrapper re-enters below; do not print it twice.
+  export OPENCLAW_UPDATE_BANNER_SHOWN=1
   if [[ -d ".git" ]]; then
     command -v git >/dev/null 2>&1 || error "git is required to update a cloned repo"
     git pull --ff-only
@@ -777,6 +799,7 @@ cmd_update() {
 }
 
 cmd_update_after_sync() {
+  [[ -n "${OPENCLAW_UPDATE_BANNER_SHOWN:-}" ]] || print_update_banner
   normalize_legacy_image_override
   compose --profile https-local pull
   bash scripts/migrate-openclaw.sh upgrade
