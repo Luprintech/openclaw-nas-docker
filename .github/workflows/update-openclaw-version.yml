@@ -104,16 +104,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pin validated version on main
+      # main está protegida y solo acepta cambios por PR, así que el bot
+      # abre uno y lo fusiona en el momento.
+      - name: Pin validated version on main (via PR)
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.detect.outputs.version }}
         run: |
-          echo "$VERSION" > .last-openclaw-version
+          BRANCH="release/openclaw-${VERSION}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "$BRANCH"
+          echo "$VERSION" > .last-openclaw-version
           git add .last-openclaw-version
           git commit -m "chore: update OpenClaw to ${VERSION}"
-          git push origin HEAD:main
+          git push --force origin "$BRANCH"
+
+          PR="$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // empty')"
+          if [[ -z "$PR" ]]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore: update OpenClaw to ${VERSION}" \
+              --body "Versión validada por el smoke test en ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Se fusiona automáticamente."
+          fi
+
+          gh pr merge "$BRANCH" --squash --delete-branch
 
       # Los pushes hechos con GITHUB_TOKEN no disparan otros workflows,
       # así que la publicación se lanza explícitamente.
@@ -135,25 +150,34 @@ jobs:
           done
 
   report-failure:
-    needs: [detect, validate]
-    if: failure() && needs.validate.result == 'failure'
+    needs: [detect, validate, release]
+    if: failure() && (needs.validate.result == 'failure' || needs.release.result == 'failure')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Open issue for failed validation
+      - name: Open issue for failed update
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.detect.outputs.version }}
+          FAILED_JOB: ${{ needs.validate.result == 'failure' && 'validate' || 'release' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh label create openclaw-update-failed --color B60205 \
-            --description "Automatic OpenClaw update failed validation" \
+            --description "Automatic OpenClaw update failed" \
             --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+
+          if [[ "$FAILED_JOB" == "validate" ]]; then
+            TITLE="OpenClaw ${VERSION} failed automatic validation"
+            WHAT="no ha superado el smoke test"
+          else
+            TITLE="OpenClaw ${VERSION} failed automatic release"
+            WHAT="ha pasado el smoke test, pero no se ha podido fusionar en \`main\` (puede que quede un PR abierto pendiente de fusionar a mano)"
+          fi
 
           gh issue create --repo "$GITHUB_REPOSITORY" \
             --label openclaw-update-failed \
-            --title "OpenClaw ${VERSION} failed automatic validation" \
-            --body "La versión \`${VERSION}\` no ha superado el smoke test, así que **no** se ha publicado y \`main\` sigue en la versión anterior.
+            --title "$TITLE" \
+            --body "La versión \`${VERSION}\` ${WHAT}, así que **no** se ha publicado y \`main\` sigue en la versión anterior.
 
           Logs: ${RUN_URL}
 
