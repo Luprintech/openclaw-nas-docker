@@ -1,5 +1,7 @@
 # OpenClaw on NAS
 
+**English** | [Español](README.es.md)
+
 <p align="center">
   <img src="https://img.shields.io/badge/NAS-Docker_capable-2ea44f" alt="Docker-capable NAS"/>
   <img src="https://img.shields.io/badge/Synology-Tested-orange?logo=synology" alt="Tested on Synology"/>
@@ -13,24 +15,56 @@
   <img src="assets/openclaw-nas.png" alt="OpenClaw NAS Docker deployment" width="720"/>
 </p>
 
-Docker deployment for OpenClaw on a NAS with local HTTPS.
-Access is **LAN-only** — do not port-forward OpenClaw from your router.
+Run [OpenClaw](https://openclaw.ai) on a NAS with Docker, local HTTPS and
+**LAN-only** access. Do not port-forward OpenClaw from your router.
 
 ```text
-LAN browser -> https://<nas-ip>:8443 -> Nginx TLS proxy -> OpenClaw gateway
+LAN browser -> https://<nas-ip>:8443 -> Nginx TLS proxy -> OpenClaw gateway (127.0.0.1:18789)
 ```
 
-The NAS deployment uses the pre-built image published by this repository:
+The NAS runs a pre-built image published by this repository. It never builds
+the image locally:
 
-```text
-ghcr.io/luprintech/openclaw-nas-docker:latest
-```
+| Registry | Image |
+| -------- | ----- |
+| GitHub Container Registry (default) | `ghcr.io/luprintech/openclaw-nas-docker` |
+| Docker Hub (mirror) | `luprintechdev/openclaw-nas-docker` |
 
-The NAS does **not** build the image locally. GitHub Actions builds the image from
-`Dockerfile` and publishes it to GHCR; `docker-compose.yml` only pulls and runs it.
+GitHub Actions builds the image from `Dockerfile`, tests it and publishes it;
+`docker-compose.yml` only pulls and runs it.
 
-Tested on Synology. Should work on any NAS that runs Docker
-(QNAP, Ugreen, TerraMaster, Asustor, etc.).
+## Contents
+
+- [Requirements](#requirements)
+- [Video tutorial](#video-tutorial)
+- [First install, step by step](#first-install-step-by-step)
+- [Everyday commands](#everyday-commands)
+- [Updating OpenClaw](#updating-openclaw)
+- [Release channels](#release-channels)
+- [Backups and restoring](#backups-and-restoring)
+- [Re-running the installer](#re-running-the-installer)
+- [Installing rootCA on client devices](#installing-rootca-on-client-devices)
+- [Claude Code CLI](#claude-code-cli)
+- [Installing Python skills](#installing-python-skills)
+- [Troubleshooting](#troubleshooting)
+- [Security rules](#security-rules)
+- [Project documents](#project-documents)
+
+---
+
+## Requirements
+
+- A NAS with an **x86-64 (amd64) CPU**. Images are published for `linux/amd64`
+  only, so ARM-based models cannot run them.
+- Docker with **Docker Compose v2** (`docker compose version` must work). On
+  Synology, install **Container Manager** from the Package Center.
+- SSH access to the NAS with a user that can run `docker`.
+- `curl` on the NAS to download the installer and later updates.
+- A stable LAN IP for the NAS (see step 0).
+
+Tested on Synology DSM, including models with the Linux 4.4 kernel such as the
+DS220+. It should work on other x86-64 NAS systems that run Docker (QNAP,
+Ugreen, TerraMaster, Asustor, etc.).
 
 ---
 
@@ -42,352 +76,469 @@ Tested on Synology. Should work on any NAS that runs Docker
 
 ## First install, step by step
 
-This guide assumes you are installing OpenClaw on a NAS inside your LAN.
-The examples use `192.168.1.50` as the NAS IP. Replace it with your real NAS IP.
+The examples use `192.168.1.50` as the NAS IP and `/volume1/docker/openclaw` as
+the install folder. Replace both with your own values.
 
-> **Security rule:** keep OpenClaw LAN-only. Do **not** port-forward `18789` or `8443` from your router.
->
-> **No clone needed.** The installer is self-contained — it generates all required files (`docker-compose.yml`, `nginx.conf`, `openclaw` wrapper) automatically.
+> **Security rule:** keep OpenClaw LAN-only. Do **not** port-forward `8443` or
+> `18789` from your router.
 
 ### 0. Give your NAS a stable LAN IP
 
-OpenClaw stores your NAS IP in `.env` and uses it for dashboard URLs, allowed browser origins, and local HTTPS certificates.
-If your NAS IP changes later, the dashboard URL, certificate, and the gateway's allowed origins can stop matching — rerun `install.sh` with the new IP to regenerate everything.
-
-Use one of these approaches:
+The installer stores the NAS IP in `.env` and uses it for the dashboard URL, the
+allowed browser origins and the HTTPS certificate. If the IP changes later,
+those stop matching and you must re-run the installer with the new IP.
 
 | Option | Recommended? | Tradeoff |
 | ------ | ------------ | -------- |
-| DHCP reservation in your router | **Best option** | The router always gives the same IP to the NAS. Low risk, easy rollback. |
-| Static IP in the NAS control panel | Good option | Works without router changes, but a wrong gateway/DNS/subnet can disconnect the NAS. |
-| Static IP by SSH | Not recommended for Synology | Possible only with low-level Linux/network commands and may not survive DSM network management or reboot. Easy way to lock yourself out. |
+| DHCP reservation in your router | **Best option** | The router always gives the NAS the same IP. Low risk, easy to undo. |
+| Static IP in the NAS control panel | Good option | No router changes, but a wrong gateway, DNS or subnet can disconnect the NAS. |
+| Static IP over SSH | Not recommended on Synology | DSM manages networking and can overwrite low-level changes. Easy to lock yourself out. |
 
-#### Recommended: reserve the IP in your router
+**Recommended: reserve the IP in your router**
 
-In your router/admin panel:
-
-1. Find the NAS in the DHCP / LAN clients list.
+1. Open your router admin page and find the NAS in the DHCP / LAN clients list.
 2. Copy its MAC address.
-3. Create a DHCP reservation, also called static lease or address reservation.
-4. Assign an IP outside or safely within your DHCP plan, for example:
+3. Create a DHCP reservation (also called static lease or address reservation)
+   for that MAC, for example `192.168.1.50`.
+4. Reboot the NAS or renew its network lease.
+5. Confirm the NAS answers on that IP.
 
-```text
-192.168.1.50
-```
+**Synology DSM: set a manual IP from the UI**
 
-5. Reboot the NAS or renew its network lease.
-6. Confirm the NAS still answers on that IP.
+1. In DSM, open **Control Panel → Network → Network Interface**.
+2. Select your active interface (usually **LAN 1**) and click **Edit**.
+3. In IPv4, choose manual configuration and set the IP (for example
+   `192.168.1.50`), subnet mask (usually `255.255.255.0`), gateway (your router,
+   for example `192.168.1.1`) and DNS server.
+4. Apply and reconnect to DSM using the new IP.
 
-This is the cleanest architecture: the router owns addressing, the NAS just receives the same address every time.
+A wrong gateway, subnet or IP range can cut your access to DSM until you fix it
+locally, so double-check the values. Use SSH only to check the current address
+(`ip addr`), not to set a permanent one.
 
-#### Synology DSM: set a manual IP from the UI
+### 1. Connect to the NAS and create the install folder
 
-If you prefer setting the IP directly in Synology DSM:
-
-1. Open DSM in your browser.
-2. Go to **Control Panel**.
-3. Open **Network**.
-4. Go to **Network Interface**.
-5. Select your active LAN interface, usually **LAN 1**.
-6. Click **Edit**.
-7. In IPv4 settings, choose manual configuration instead of DHCP.
-8. Set:
-   - **IP address**: for example `192.168.1.50`
-   - **Subnet mask**: commonly `255.255.255.0`
-   - **Gateway**: your router IP, for example `192.168.1.1`
-   - **DNS server**: your router IP or a DNS server you trust
-9. Apply the changes.
-10. Reconnect to DSM using the new IP.
-
-Be careful here. If you put the wrong gateway, subnet, or IP range, you can lose access to DSM until you fix networking locally.
-
-#### Can I assign the static IP by SSH?
-
-For this project, do **not** document SSH as the normal way to set a permanent Synology IP.
-DSM owns network configuration and can overwrite low-level changes. Commands like `ip addr` are useful for diagnostics or temporary changes, not as a reliable persistent setup path.
-
-Use SSH only to check the current address:
+| NAS | Suggested path |
+| --- | -------------- |
+| Synology | `/volume1/docker/openclaw` |
+| QNAP | `/share/Container/openclaw` |
+| Others | `/opt/openclaw` or any writable folder |
 
 ```bash
-hostname -I
-ip addr
-```
-
-Now continue with that stable IP in the rest of the guide.
-
-### 1. Know your NAS LAN IP
-
-Find the LAN IP of your NAS from your router, NAS control panel, or SSH:
-
-```bash
-hostname -I
-```
-
-Example used below:
-
-```text
-192.168.1.50
-```
-
-### 2. SSH to your NAS and run the installer
-
-Choose a directory on your NAS:
-
-| NAS      | Suggested path                            |
-| -------- | ----------------------------------------- |
-| Synology | `/volume1/docker/openclaw`                |
-| QNAP     | `/share/Container/openclaw`               |
-| Others   | `/opt/openclaw` or any writable directory |
-
-Connect by SSH, create the directory, and run the installer:
-
-```bash
-ssh admin@192.168.1.50
+ssh your-user@192.168.1.50
 mkdir -p /volume1/docker/openclaw
 cd /volume1/docker/openclaw
+```
+
+On Synology, enable SSH first in **Control Panel → Terminal & SNMP**.
+
+### 2. Download and run the installer
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main/install.sh -o install.sh
 chmod +x install.sh
 ./install.sh 192.168.1.50
 ```
 
-Or if your NAS supports piping:
+Run it from the install folder and keep `install.sh` there: you will use it
+again if the IP or port changes. Do not run it as `bash <(curl ...)`, because
+that form cannot find the install folder.
 
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main/install.sh) 192.168.1.50
-```
+The installer:
 
-The installer handles everything automatically:
+1. Checks that Docker and Docker Compose v2 are available.
+2. Creates `.env` with a random `OPENCLAW_GATEWAY_TOKEN`, your time zone and
+   the NAS IP.
+3. Generates a local certificate authority and an HTTPS certificate for the NAS
+   IP under `certs/`.
+4. Writes `docker-compose.yml`, `nginx/nginx.conf` and the `./openclaw` command
+   wrapper.
+5. Creates `config/` and `workspace/` and gives them to UID/GID 1000, the user
+   that runs OpenClaw inside the container.
+6. Downloads the image if it is not on the NAS yet and starts the stack.
+7. Applies the allowed Control UI origins and the reverse-proxy settings.
 
-- Generates `docker-compose.yml`, `nginx/nginx.conf`, and the `openclaw` CLI wrapper.
-- Creates `.env` with a secure, randomly generated `OPENCLAW_GATEWAY_TOKEN`.
-- Configures HTTPS-only LAN access.
-- Generates local TLS certificates under `certs/`.
-- Validates the environment.
-- Pulls and starts the Docker Compose stack using the pre-built GHCR image.
-- Applies the allowed Control UI origins.
+When it finishes it prints the dashboard URL and the path of the root
+certificate.
 
-After install, add your AI provider key(s) to `.env`.
+### 3. Trust the local root certificate on each device
 
-**Option A — via SSH (Synology doesn't include `nano`, use `vi`):**
+The installer created a private certificate authority for your LAN. Copy its
+root certificate from the NAS to every computer or phone that will open
+OpenClaw:
 
-```bash
-vi .env
-```
+- `certs/rootCA.cer` for Windows
+- `certs/rootCA.pem` for macOS, iPhone/iPad, Android and Linux
 
-Basic `vi` commands:
-- Press `i` to enter insert mode and edit
-- Press `Esc` when done editing
-- Type `:wq` and press `Enter` to save and exit
-- Type `:q!` and press `Enter` to exit without saving
+You can copy it with File Station (Synology) or `scp`. Then install it as a
+trusted root authority: see
+[Installing rootCA on client devices](#installing-rootca-on-client-devices).
 
-**Option B — via File Station:** open File Station, navigate to the `openclaw` folder, right-click `.env` → *Open with Text Editor*.
+If you skip this step the browser warns that the connection is not private.
+That is expected for a private LAN certificate.
 
-Fill in at least one provider:
+### 4. Open the dashboard
 
-```env
-ANTHROPIC_API_KEY=your-key-here
-# or OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, etc.
-```
-
-One key is enough to start. If you leave them empty, onboarding can still configure providers later.
-
-#### About `http://<nas-ip>:18789`
-
-Do **not** use `http://192.168.1.50:18789` as the normal browser URL.
-That port is the raw OpenClaw gateway port — it is bound to `127.0.0.1` (private), and Nginx is the only LAN-facing entry point.
-
-Correct browser URL:
+Open the HTTPS URL in your browser:
 
 ```text
 https://192.168.1.50:8443
 ```
 
-### 3. Install the local root certificate on each client device
+There is no plain-HTTP address. Port `18789` only listens on the NAS itself
+(`127.0.0.1`), so `http://192.168.1.50:18789` will not work from your computer.
 
-Copy the generated root certificate from the NAS to every device that will open OpenClaw:
+If the dashboard asks for the gateway token, show it on the NAS and paste only
+the value after `=`:
 
-```text
-certs/rootCA.pem
+```bash
+grep OPENCLAW_GATEWAY_TOKEN .env
 ```
 
-Windows users can use:
-
-```text
-certs/rootCA.cer
-```
-
-Then trust that certificate on the device. See [Installing rootCA.pem](#installing-rootcapem) below.
-
-If you skip this step, the browser will warn that the HTTPS certificate is not trusted. That is expected: you created a private local CA for your LAN, not a public internet certificate.
-
-### 4. Open the OpenClaw dashboard
-
-Use the HTTPS URL:
-
-```text
-https://192.168.1.50:8443
-```
-
-Do not open the dashboard through plain HTTP.
-
-When the dashboard asks for the gateway token, paste the exact value from `.env`:
-
-```env
-OPENCLAW_GATEWAY_TOKEN=your-token-here
-```
-
-Do not paste the key name. Paste only the token value.
-
-### 5. Run onboarding
-
-From the NAS project directory:
+### 5. Run onboarding and configure your AI provider
 
 ```bash
 ./openclaw onboard
 ```
 
-This runs OpenClaw onboarding inside the Docker container without installing a host daemon.
+Onboarding runs inside the container. Follow the prompts to choose your AI
+provider and enter its API key or sign in. **This is where providers are
+configured.**
+
+The `.env` file contains empty entries such as `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY`, but the containers do not read them. Filling them in has no
+effect; use onboarding instead.
 
 ### 6. Pair your browser
 
-Pairing is the step that authorizes your browser as a known device.
+Pairing authorizes your browser as a known device.
 
-Print the dashboard and pairing information:
+1. Print the dashboard and pairing information:
 
-```bash
-./openclaw dashboard
-```
+   ```bash
+   ./openclaw dashboard
+   ```
 
-Then:
+2. Open the printed URL in your browser, enter the gateway token if asked and
+   start the pairing flow.
+3. Back in SSH, list pending devices:
 
-1. Open the printed dashboard / pairing URL in your browser.
-2. Enter `OPENCLAW_GATEWAY_TOKEN` if the UI asks for it.
-3. Start the pairing flow from the browser.
-4. Go back to SSH and list pending devices:
+   ```bash
+   ./openclaw devices
+   ```
 
-```bash
-./openclaw devices
-```
+4. Copy the `request_id` of your browser and approve it:
 
-5. Copy the pending `request_id`.
-6. Approve it:
+   ```bash
+   ./openclaw approve <request_id>
+   ```
 
-```bash
-./openclaw approve <request_id>
-```
+5. Refresh the browser. It is now paired.
 
-Example:
-
-```bash
-./openclaw approve abc123
-```
-
-7. Refresh the browser dashboard.
-
-Your browser should now be paired and allowed to use the OpenClaw Control UI.
-
-### 7. Verify the stack is running
+### 7. Check that everything works
 
 ```bash
 ./openclaw status
 ./openclaw doctor
 ```
 
-If something fails, check logs:
+`status` should show both containers as `Up` and the gateway as `healthy`. If
+something fails, look at the logs:
 
 ```bash
-./openclaw logs
 ./openclaw logs openclaw-gateway
 ./openclaw logs nginx
 ```
 
+Press `Ctrl+C` to stop following the logs.
+
 ---
 
-## Subsequent installs and updates
+## Everyday commands
 
-After the first install, the NAS IP and HTTPS mode are saved in `.env`.
-You only need to run:
+Run them from the install folder.
+
+**OpenClaw** (the stack must be running):
+
+| Command | What it does |
+| ------- | ------------ |
+| `./openclaw onboard` | Runs OpenClaw onboarding |
+| `./openclaw dashboard` | Prints the dashboard and pairing URL |
+| `./openclaw devices` | Lists known and pending devices |
+| `./openclaw approve <request_id>` | Approves a device pairing request |
+| `./openclaw doctor` | Runs OpenClaw diagnostics |
+| `./openclaw agent --message "hi"` | Talks to the assistant |
+| `./openclaw message send --target <target> --message "hi"` | Sends a message through a channel |
+| `./openclaw pip install <package>` | Installs a Python package for skills |
+| `./openclaw claude` | Opens the Claude Code CLI |
+| `./openclaw <anything else>` | Passes the command to the OpenClaw CLI, e.g. `./openclaw config get gateway.bind` |
+
+**Stack:**
+
+| Command | What it does |
+| ------- | ------------ |
+| `./openclaw start` | Creates and starts the containers (`docker compose up -d`). Applies changes to `.env` |
+| `./openclaw stop` | Stops **and removes** the containers (`docker compose down`). Your data in `config/` and `workspace/` is kept |
+| `./openclaw restart` | Restarts the existing containers. Does **not** apply `.env` changes: use `stop` + `start` for that |
+| `./openclaw status` | Shows container status |
+| `./openclaw logs [service]` | Follows the logs of all services or one (`openclaw-gateway`, `nginx`) |
+| `./openclaw shell` | Opens a shell in a temporary CLI container |
+| `./openclaw update` | Updates the stack files and the image, then migrates your data (see below) |
+| `./openclaw help` | Shows the command list |
+
+---
+
+## Updating OpenClaw
+
+Always update with:
 
 ```bash
-./install.sh
+cd /volume1/docker/openclaw
+./openclaw update
 ```
 
-No arguments needed.
+The stack must be running. If you stopped it, run `./openclaw start` first.
+
+What `./openclaw update` does, in order:
+
+1. Shows the updater banner and downloads the latest `install.sh`,
+   `docker-compose.yml`, `openclaw` and `scripts/migrate-openclaw.sh` from this
+   repository (or runs `git pull` if the folder is a Git clone).
+2. Pulls the configured image (`:latest` by default).
+3. Backs up your OpenClaw data, `.env`, `docker-compose.yml` and `nginx/` into
+   a new `openclaw-backup-<date>-<time>` folder (see
+   [Backups and restoring](#backups-and-restoring)).
+4. Stops the gateway, repairs file ownership, and runs the data migrations
+   required by the new OpenClaw version.
+5. Starts the gateway, waits until it is healthy (up to 2 minutes) and restarts
+   Nginx.
+
+When it finishes, check the result:
+
+```bash
+./openclaw status
+```
+
+> **Do not update with `docker compose pull` and `up -d` alone.** That skips
+> the data migration: recent OpenClaw versions then start with a degraded agent
+> database, Docker still reports the gateway as healthy and the Control UI does
+> not load. If that already happened, run
+> `bash scripts/migrate-openclaw.sh upgrade`.
+
+If an update fails, do not restart the gateway again and again. Keep the backup
+folder it printed and look at the logs:
+
+```bash
+docker compose ps
+docker compose logs --since 5m --tail=120 openclaw-gateway
+```
+
+The updater never deletes backups and never restores data on its own, so you
+keep the evidence and decide what to do.
+
+On Synology, `openclaw doctor --fix` can print
+`EPERM: operation not permitted, fchmod`. It is harmless only if the update
+finishes, the gateway log shows `gateway ready` and `./openclaw status` shows the
+gateway as `healthy`.
+
+> [!IMPORTANT]
+> **Installed before the Synology 2026.9.9 compatibility update?** Refresh the
+> `./openclaw` wrapper once before your first update. It does not touch your
+> configuration, workspace or sessions:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main/install.sh -o install.sh
+> bash install.sh --wrapper-only
+> ./openclaw update
+> ```
 
 ---
 
-## Installing rootCA.pem
+## Release channels
+
+Every image is published under several tags:
+
+| Tag | When it changes | Use it if |
+| --- | --------------- | --------- |
+| `latest` (default) | Only after the version has been tested on a real Synology NAS | You want a stable NAS. `install.sh` and `docker-compose.yml` use it |
+| `edge` | As soon as a new OpenClaw version passes the automated tests | You want new versions early and can recover from a broken update |
+| `<version>` (e.g. `2026.11.6`) | Never; it always points to the same image | You want to refer to an exact build |
+
+How a new OpenClaw version reaches `latest`:
+
+1. Every six hours a workflow checks for a new **stable** OpenClaw release
+   (prereleases are ignored).
+2. CI builds the image and runs `scripts/smoke-test.sh`: clean start, upgrade
+   from the current `latest` on the same data, healthy gateway, no degraded
+   agent database and a working `claude` CLI. If anything fails, nothing is
+   published and an issue labelled `openclaw-update-failed` is opened.
+3. If the tests pass, a pull request pins the version on `main` and is merged
+   automatically. The image is published as `:<version>` and `:edge` on GHCR
+   and Docker Hub, with a GitHub prerelease and an issue labelled
+   `release-candidate` that contains the NAS checklist.
+4. The maintainer tests that image on a Synology NAS. CI runners use a modern
+   kernel and cannot reproduce problems specific to the Linux 4.4 kernel of
+   some Synology models (for example the missing `openat2` call).
+5. The maintainer runs the **Promote to stable** workflow. It copies that exact
+   image to `:latest` on both registries without rebuilding it, marks the
+   GitHub release as latest and closes the checklist issue. Running it with an
+   older version rolls `latest` back.
+
+After a promotion or a rollback, run `./openclaw update` on your NAS to get it.
+
+### Following `edge`
+
+1. Edit `.env` and set:
+
+   ```env
+   OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:edge
+   ```
+
+2. Run `./openclaw update`.
+
+To go back to `latest`, leave the value empty (`OPENCLAW_IMAGE=`) and run
+`./openclaw update`. If `edge` was newer than `latest`, this is a downgrade:
+data migrations are not reversible, so restore the backup made before you
+switched (see [Backups and restoring](#backups-and-restoring)).
+
+> **Version pins:** `./openclaw update` resets an
+> `OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:<version>` value to
+> empty, so a GHCR version pin does not survive an update. Use `latest` or
+> `edge`.
+
+---
+
+## Backups and restoring
+
+Every `./openclaw update` creates a folder next to your installation:
+
+```text
+openclaw-backup-YYYYMMDD-HHMMSS/
+├── openclaw-home/       # OpenClaw data: config, sessions, agents, workspace, Claude login
+├── .env
+├── docker-compose.yml
+└── nginx/
+```
+
+Set `OPENCLAW_BACKUP_ROOT` before running the update to store them somewhere
+else. Backups contain your gateway token, provider keys and Claude login in
+plain text: keep them private and delete old ones you no longer need.
+
+To restore a backup (for example after a failed update):
+
+1. Stop the stack:
+
+   ```bash
+   cd /volume1/docker/openclaw
+   ./openclaw stop
+   ```
+
+2. Move the current data aside instead of deleting it:
+
+   ```bash
+   mv config config.before-restore
+   mv workspace workspace.before-restore
+   ```
+
+3. Copy the backup back with the right owner. A temporary container does the
+   copy, because the SSH user may not be allowed to read files owned by UID
+   1000:
+
+   ```bash
+   B=openclaw-backup-YYYYMMDD-HHMMSS
+   docker run --rm -v "$PWD:/w" alpine sh -c \
+     "cp -a /w/$B/openclaw-home /w/config \
+      && if [ -d /w/config/workspace ]; then mv /w/config/workspace /w/workspace; else mkdir /w/workspace; fi \
+      && chown -R 1000:1000 /w/config /w/workspace"
+   ```
+
+4. Pin the version you were running before the update (see the
+   [releases](https://github.com/Luprintech/openclaw-nas-docker/releases) if
+   you are not sure) in `.env`, for example:
+
+   ```env
+   OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:2026.11.5
+   ```
+
+5. Start the stack with `./openclaw start` (not `update`, which would clear the
+   pin and migrate again) and check `./openclaw status`.
+
+When everything works, you can delete `config.before-restore` and
+`workspace.before-restore`. Remove the pin and run `./openclaw update` again
+once a fixed version is on `latest`.
+
+---
+
+## Re-running the installer
+
+Re-run the installer only to change the NAS IP or HTTPS port, or to repair the
+installation:
+
+```bash
+./install.sh 192.168.1.60   # new IP
+./install.sh                # same IP, read from .env
+```
+
+It keeps your token, data and certificate authority. It rewrites
+`docker-compose.yml`, issues a new HTTPS certificate, repairs file ownership and
+re-applies the allowed origins and proxy settings. Existing `nginx/nginx.conf`
+and `./openclaw` files are left as they are.
+
+The installer does **not** update OpenClaw: it does not pull a newer image or
+migrate data. Use `./openclaw update` for that.
+
+To change the HTTPS port, edit `OPENCLAW_HTTPS_PORT` in `.env` and re-run
+`./install.sh`, so the allowed origins match the new port.
+
+---
+
+## Installing rootCA on client devices
 
 ### Windows
 
 1. Copy `certs/rootCA.cer` to the PC.
-2. Double-click it → Install Certificate.
+2. Double-click it and choose **Install Certificate**.
 3. Choose **Local Machine**.
 4. Place it in **Trusted Root Certification Authorities**.
 
 ### macOS
 
-1. Open `rootCA.pem` → Keychain Access adds it to System keychain.
-2. Open the certificate → set SSL trust to **Always Trust**.
+1. Open `rootCA.pem`: Keychain Access adds it to the System keychain.
+2. Open the certificate and set **When using this certificate** to
+   **Always Trust**.
 
 ### iPhone / iPad
 
-1. Open `rootCA.pem` on the device → Install Profile.
+1. Open `rootCA.pem` on the device and install the profile.
 2. Go to **Settings → General → About → Certificate Trust Settings**.
-3. Enable full trust for the CA.
+3. Enable full trust for the certificate.
 
 ### Android
 
 ```text
-Settings → Security → Encryption & credentials → Install a CA certificate
+Settings → Security → Encryption & credentials → Install a certificate → CA certificate
 ```
 
-Exact names vary by manufacturer.
+Menu names vary by manufacturer.
 
----
-
-## Operational commands
-
-```bash
-./openclaw onboard               # First-time setup
-./openclaw dashboard             # Print dashboard / pairing URL
-./openclaw devices               # List devices
-./openclaw approve <request_id>  # Approve a device
-./openclaw doctor                # Run diagnostics
-./openclaw claude                # Open Claude Code interactive TUI
-./openclaw message send --target <channel> --message "hi"  # Send a message
-./openclaw agent --message "hi"  # Talk to the assistant
-./openclaw update                # Pull repo changes, pull image, restart
-./openclaw pip install <pkg>     # Install a Python skill package (persists across restarts)
-./openclaw status                # Container status
-./openclaw logs                  # Follow all logs
-./openclaw logs openclaw-gateway # Gateway logs only
-./openclaw logs nginx            # Nginx logs only
-./openclaw restart               # Restart the stack
-./openclaw stop                  # Stop the stack
-```
-
-Raw CLI pass-through:
-
-```bash
-./openclaw config get gateway.bind
-```
+The certificate authority is created once and reused. Re-running the installer
+issues a new server certificate signed by the same authority, so devices that
+already trust it do not need to install it again.
 
 ---
 
 ## Claude Code CLI
 
-The image includes Claude Code. `./openclaw claude` opens it in a throwaway
+The image includes Claude Code. `./openclaw claude` opens it in a temporary
 container, and the OpenClaw gateway can use the same CLI as its `claude-cli`
 model backend (see the
 [OpenClaw CLI backends documentation](https://docs.openclaw.ai/gateway/cli-backends)).
 
 Both containers set `CLAUDE_CONFIG_DIR=/home/node/.openclaw/claude`, which is
-`config/claude` on the NAS. Your Claude login, settings, memory and
-conversation history live there, so they survive closing the CLI, restarting
-the stack and updating the image, and the gateway sees the same login as the
-CLI. Installations that update from an older release sign in once more,
-because the previous session only existed inside the removed container.
+`config/claude` on the NAS. Your Claude login, settings, memory and history
+live there, so they survive closing the CLI, restarting the stack and updating
+the image. Installations that update from an older release need to sign in
+once more.
 
 Sign in once, then check the status:
 
@@ -398,222 +549,93 @@ docker compose exec openclaw-gateway claude auth status --text
 
 Claude Code accepts an Anthropic account login or an API key. For shared or
 continuous automation through the gateway, OpenClaw's documentation recommends
-the Anthropic API-key path for predictable billing
+an API key for predictable billing
 ([Docker storage](https://docs.openclaw.ai/install/docker/networking-and-storage)).
-If you use an account login with third-party tools, check Anthropic's current
-terms and usage limits.
+If you sign in with an account, check Anthropic's current terms and usage
+limits for third-party tools.
 
 `config/claude` stores your Claude login token in plain text, like the gateway
-token in `.env`. Do not share or commit it. `./openclaw update` backups include
-it, so delete old `openclaw-backup-*` folders once you no longer need them.
+token in `.env`. Do not share or commit it.
 
 ---
 
 ## Installing Python skills
 
-The container includes Python 3 and pip. Packages are stored in a virtual environment at `/home/node/.openclaw/python-venv`, inside the persisted `config/` volume — they survive container restarts and image updates.
-
-### Method A — wrapper command (recommended)
-
-```bash
-./openclaw pip install <skill-package>
-```
-
-If you get `Unknown command: openclaw pip`, your wrapper is outdated. Run this once to update it:
+The container includes Python 3 and pip. Packages go into a virtual environment
+at `/home/node/.openclaw/python-venv`, inside `config/`, so they survive
+restarts and image updates.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main/install.sh -o install.sh \
-  && rm openclaw \
-  && bash install.sh --wrapper-only
+./openclaw pip install <package>
 ```
 
-After that, `./openclaw pip install` works and future `./openclaw update` calls keep the wrapper up to date automatically.
-
-### Method B — directly inside the container
+If you get `Unknown command: openclaw pip`, your wrapper is outdated. Refresh it
+once:
 
 ```bash
-docker compose exec openclaw-gateway bash
-pip install <skill-package>
-exit
+curl -fsSL https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main/install.sh -o install.sh
+bash install.sh --wrapper-only
 ```
 
-> **Note:** `pip install -g` does not apply to Python — just use `pip install` as shown above.
-
----
-
-## Updating OpenClaw
-
-> [!IMPORTANT]
-> **Installed OpenClaw before the Synology 2026.9.9 compatibility update?** Refresh the local `./openclaw` wrapper **once** before your first update. This safely upgrades the wrapper; it does not delete your configuration, workspace, or sessions:
->
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/luprintech/openclaw-nas-docker/main/install.sh -o install.sh \
->   && rm -f openclaw \
->   && bash install.sh --wrapper-only
-> ```
->
-> Then run `./openclaw update`. After that one-time migration, use only `./openclaw update` for all future updates.
-
-Recommended update path on the NAS:
-
-```bash
-./openclaw update
-```
-
-`./openclaw update` pulls repository changes, pulls the configured image,
-creates a Docker-level backup of the protected OpenClaw state, runs the
-required state migrations, repairs the reverse-proxy trust configuration, and
-restarts the stack only after the gateway is healthy. By default,
-`docker-compose.yml` uses the published `latest` image.
-
-The `OPENCLAW_IMAGE` value in `.env` decides which image is used. When it is
-empty (the default), the stack follows the latest published image. Older
-installations that pinned a version, either with the former local image name
-`openclaw-nas-docker:synology-<version>` or with
-`ghcr.io/luprintech/openclaw-nas-docker:<version>`, would never receive newer
-releases, so `./openclaw update` clears that pin on the first update. The
-previous `.env` is saved as `.env.before-image-migration.<timestamp>` before
-this change. Custom image names and `:latest` are left untouched.
-
-The migration is deliberately performed through Docker rather than by copying
-`config/` as the SSH user. Synology permissions can prevent the SSH user from
-reading files owned by UID 1000 inside the container. During each controlled
-update, the helper also restores ownership of the persisted OpenClaw state to
-UID/GID 1000 before migration. This repairs files left by older releases and
-lets the gateway install plugins without a separate manual permission repair.
-The helper also runs the dedicated session SQLite import required by recent
-OpenClaw releases; a plain `openclaw doctor --fix` is not sufficient for every
-non-interactive upgrade.
-
-During a clean installation, the installer repairs the ownership of `config/`
-and `workspace/` through a one-off Docker container because the Synology SSH
-user may not have permission to run `chown` on those bind mounts.
-
-On Synology, `openclaw doctor --fix` can report
-`EPERM: operation not permitted, fchmod` after applying migrations. Treat this
-as non-fatal only when the helper completes, the gateway log contains
-`gateway ready`, and `docker compose ps` reports the gateway as `healthy`.
-Otherwise stop and inspect the backup and logs before retrying.
-
-If an upgrade reports a failure, do not repeatedly restart the gateway. Keep
-the printed backup directory and inspect:
-
-```bash
-docker compose ps
-docker compose logs --since 5m --tail=120 openclaw-gateway
-```
-
-The update helper does not delete the backup or silently restore data. This
-keeps recovery explicit and prevents a second migration from overwriting the
-operator's evidence.
-
-> **Always update with `./openclaw update`.** Running only `docker compose pull`
-> and `up -d` skips the state migration. Recent releases then start with a
-> degraded agent database (`schema version 25 ... run openclaw doctor --fix`),
-> Docker still reports the gateway as healthy, and the Control UI does not load.
-> If that already happened, run `bash scripts/migrate-openclaw.sh upgrade`.
-
-Manual version pin update, only needed by maintainers (CI does this
-automatically):
-
-```bash
-./openclaw update-version
-```
-
-### Release channels
-
-Every image is published under several tags. Pick the one that matches how
-much risk you accept:
-
-| Tag | Updated | Use it if |
-| --- | ------- | --------- |
-| `latest` (default) | Only after the version has been validated on a real Synology NAS | You want a stable NAS. This is what `install.sh` and `docker-compose.yml` use. |
-| `edge` | Automatically, as soon as a new OpenClaw release passes CI | You want new releases early and can recover from a broken update. |
-| `<version>` (e.g. `2026.11.6`) | Never moves once published | You want to pin an exact version. |
-
-How a version reaches `latest`:
-
-1. Every six hours a scheduled workflow checks for a new **stable** OpenClaw
-   release (prereleases are ignored) whose Docker image is already published.
-2. CI builds the candidate and runs `scripts/smoke-test.sh`: clean start,
-   upgrade from the current `latest` on the same `./config`, healthy gateway,
-   no degraded agent database and a working `claude` CLI. If it fails, nothing
-   is published and an issue labelled `openclaw-update-failed` is opened.
-3. If it passes, the version is pinned on `main` and published as
-   `:<version>` and `:edge`, together with a GitHub prerelease and an issue
-   labelled `release-candidate`.
-4. The maintainer tests that image on a Synology NAS. CI runners use a modern
-   kernel and cannot reproduce problems specific to the Linux 4.4 kernels of
-   some Synology models (for example missing `openat2`).
-5. The **Promote to stable** workflow retags that exact image as `latest`
-   without rebuilding it and marks the GitHub release as latest. Running it
-   with an older version rolls `latest` back.
-
-To follow `edge`, set it in `.env` and update as usual:
-
-```bash
-OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:edge
-```
-
-Clear the value (`OPENCLAW_IMAGE=`) to go back to `latest`. Moving from `edge`
-to an older `latest` is a downgrade: restore the backup created by
-`./openclaw update` instead of only switching tags.
-
-### Reverse-proxy trust on OpenClaw 2026.9+
-
-The installer configures Nginx to overwrite `X-Forwarded-For` with the actual
-client socket address. It then detects the current Nginx container IP and adds
-only that IP to `gateway.trustedProxies`. This avoids trusting arbitrary
-forwarded headers while remaining safe when Docker assigns a different Nginx
-IP after an update.
-
-Do not replace this with a broad Docker subnet or enable real-IP fallback unless
-you have reviewed the proxy boundary and header behavior.
-
+From then on, `./openclaw update` keeps the wrapper up to date.
 
 ---
 
 ## Troubleshooting
 
-### Plugin requires a newer plugin API than this OpenClaw runtime
+### `OpenClaw gateway container is not running; start the stack before updating`
 
-If installing a plugin fails with a message like:
+`./openclaw update` needs the gateway container to exist, because it backs up
+your data from it. This happens after `./openclaw stop` or if the container
+was deleted in Container Manager. Your data in `config/` and `workspace/` is
+safe. Start the stack and update again:
+
+```bash
+./openclaw start
+./openclaw update
+```
+
+### The Control UI does not load after an update
+
+You probably updated with `docker compose pull` / `up -d` instead of
+`./openclaw update`, so the data migration did not run:
+
+```bash
+bash scripts/migrate-openclaw.sh upgrade
+```
+
+### Plugin requires a newer plugin API than this OpenClaw runtime
 
 ```text
 Plugin "@openclaw/whatsapp" requires plugin API >=2026.10.1, but this OpenClaw
 runtime exposes 2026.9.9.
 ```
 
-this is a version mismatch, not a permissions problem. The plugin was published
-for a newer OpenClaw release than the image you are running. Update first, then
-retry the install:
+The plugin was published for a newer OpenClaw version than the one you run.
+Update, check your version and retry:
 
 ```bash
 ./openclaw update
 docker compose exec openclaw-gateway node dist/index.js --version
 ```
 
-If the plugin still asks for a newer API than the version printed, it was
-published for a release that this repository has not validated and published
-yet. New OpenClaw versions reach `latest` only after they are tested on
-Synology (see [Release channels](#release-channels)), so wait for the next
-promotion and update again, or switch to `edge` if you accept the risk.
+If the plugin still needs a newer version, that OpenClaw release has not reached
+`latest` yet (see [Release channels](#release-channels)). Wait for the next
+promotion or switch to `edge` if you accept the risk.
 
 ### EACCES: permission denied
 
-OpenClaw runs as UID/GID `1000` inside the container. Most NAS systems create
-bind-mount directories owned by the SSH user, which causes EACCES errors like:
+OpenClaw runs as UID/GID `1000` inside the container. If the data folders
+belong to another user you see errors like:
 
 ```text
 EACCES: permission denied, open '/home/node/.openclaw/openclaw.json...tmp'
 ```
 
-Fix:
+Fix the owner with a temporary container (works without `sudo`):
 
 ```bash
-cd /path/to/openclaw
-sudo chown -R 1000:1000 config workspace
-sudo chmod -R u+rwX config workspace
+docker run --rm -v "$PWD:/w" alpine chown -R 1000:1000 /w/config /w/workspace
 ./openclaw restart
 ```
 
@@ -624,18 +646,13 @@ sudo chown -R "$(id -u):$(id -g)" certs
 chmod -R u+rwX certs
 ```
 
-If your NAS user cannot use `sudo`, fix ownership from your NAS admin panel
-(DSM File Station on Synology, File Manager on QNAP, etc.).
-
 ### Container name conflicts
-
-If you see:
 
 ```text
 Conflict. The container name "/openclaw-gateway" is already in use
 ```
 
-you have leftovers from an older install with fixed container names.
+These are leftovers from an older install that used fixed container names:
 
 ```bash
 docker ps -a --filter name=openclaw
@@ -644,22 +661,35 @@ docker rm   openclaw-gateway openclaw-cli openclaw-nginx 2>/dev/null || true
 ./install.sh
 ```
 
-### Missing bind mount directories
+### The NAS IP changed
 
-If Docker reports a missing bind mount, create the directories and rerun:
+The dashboard URL, the certificate and the allowed origins still point to the
+old IP. Re-run the installer with the new one:
 
 ```bash
-mkdir -p config workspace certs
-./install.sh
+./install.sh <new-nas-ip>
 ```
-
-Current versions of `install.sh` create these directories automatically.
 
 ---
 
 ## Security rules
 
-- Do not port-forward `18789` or `8443` from the router.
-- Keep `certs/` private — it is ignored by Git.
-- Never commit `.env` — it contains `OPENCLAW_GATEWAY_TOKEN`.
-- Install only OpenClaw skills/plugins you trust.
+- Do not port-forward `8443` or `18789` from the router.
+- Keep `certs/` private, especially the certificate authority key.
+- Never share or commit `.env`, `config/` or `openclaw-backup-*` folders: they
+  contain your gateway token and logins.
+- Install only OpenClaw skills and plugins you trust.
+
+The installer binds the gateway to `127.0.0.1` and Nginx to the NAS LAN IP, and
+configures Nginx to overwrite `X-Forwarded-For` with the real client address.
+It adds only the current Nginx container IP to `gateway.trustedProxies`, and
+`./openclaw update` refreshes it. Do not replace it with a broad Docker subnet.
+
+---
+
+## Project documents
+
+- [Contributing](CONTRIBUTING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md)
+- [MIT license](LICENSE)
