@@ -123,7 +123,6 @@ services:
       - ./config:/home/node/.openclaw
       - ./workspace:/home/node/.openclaw/workspace
 
-
 networks:
   openclaw-net:
     driver: bridge

@@ -129,6 +129,25 @@ jobs:
               --body "Versión validada por el smoke test en ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Se fusiona automáticamente."
           fi
 
+          # Los PR abiertos con GITHUB_TOKEN no disparan pull_request, así que
+          # el check obligatorio de main se lanza a mano sobre esta rama y se
+          # espera a que pase antes de fusionar.
+          SHA="$(git rev-parse HEAD)"
+          gh workflow run pr-checks.yml --ref "$BRANCH"
+          RUN_ID=""
+          for _ in $(seq 1 30); do
+            sleep 5
+            RUN_ID="$(gh run list --workflow pr-checks.yml --branch "$BRANCH" \
+              --event workflow_dispatch --json databaseId,headSha \
+              --jq "map(select(.headSha == \"$SHA\")) | .[0].databaseId // empty")"
+            [[ -n "$RUN_ID" ]] && break
+          done
+          if [[ -z "$RUN_ID" ]]; then
+            echo "::error::PR checks did not start for $SHA"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status
+
           gh pr merge "$BRANCH" --squash --delete-branch
 
       # Los pushes hechos con GITHUB_TOKEN no disparan otros workflows,

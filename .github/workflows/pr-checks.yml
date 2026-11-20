@@ -1,0 +1,56 @@
+name: PR checks
+
+# Comprobaciones rápidas en cada PR a main. Marcar el job "checks" como
+# required status check en la protección de main para que bloquee el merge.
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          for f in install.sh openclaw entrypoint.sh scripts/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: ShellCheck
+        run: shellcheck --version && shellcheck install.sh openclaw entrypoint.sh scripts/*.sh
+
+      - name: Embedded copies in install.sh
+        run: bash scripts/check-embedded-copies.sh
+
+      - name: Docker Compose configuration
+        env:
+          OPENCLAW_HOST_BIND: 127.0.0.1
+          OPENCLAW_GATEWAY_TOKEN: ci-placeholder
+          TZ: UTC
+        run: docker compose --profile https-local --profile cli config --quiet
+
+      - name: Workflow lint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -no-color
+
+      - name: Executable bits
+        run: |
+          missing=$(git ls-files -s install.sh openclaw entrypoint.sh 'scripts/*.sh' | awk '$1 != "100755" {print $4}')
+          if [ -n "$missing" ]; then
+            echo "Missing executable bit (run: git update-index --chmod=+x <file>):"
+            echo "$missing"
+            exit 1
+          fi
