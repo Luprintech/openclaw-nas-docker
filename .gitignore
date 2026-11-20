@@ -5,3 +5,6 @@ certs/
 config/
 workspace/
 *.tmp
+remotion/node_modules/
+remotion/out/
+/docs
