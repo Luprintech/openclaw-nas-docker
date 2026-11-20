@@ -145,13 +145,19 @@ echo "== Comprobando el paso de claves de proveedor =="
 for svc in gateway cli; do
   if [[ "$svc" == "gateway" ]]; then
     # Entorno del proceso del gateway (un `exec` no pasa por el entrypoint).
+    # Con `init: true` el gateway no es el PID 1, y /proc se recorre en orden
+    # alfabético (/proc/215 antes que /proc/7): hay que saltarse este mismo
+    # `sh`, cuyo texto también contiene "dist/index.js gateway", y exigir que
+    # la línea de comandos empiece por el proceso de node.
     # shellcheck disable=SC2016  # se expande dentro del contenedor
     env_dump="$(compose exec -T openclaw-gateway sh -c '
       for p in /proc/[0-9]*; do
-        if tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "dist/index.js gateway"; then
+        [ "${p#/proc/}" = "$$" ] && continue
+        if tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -qE "^(/usr/local/bin/)?node dist/index.js gateway"; then
           tr "\0" "\n" < "$p/environ"; break
         fi
       done')"
+    [[ -n "$env_dump" ]] || { echo "ERROR (gateway): no se encontró el proceso del gateway."; exit 1; }
   else
     env_dump="$(compose --profile cli run --rm -T openclaw-cli env)"
   fi
