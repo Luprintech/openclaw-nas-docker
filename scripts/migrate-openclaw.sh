@@ -63,6 +63,21 @@ format_elapsed() {
   fi
 }
 
+# Shortens a live progress label to the terminal width. A line that wraps
+# cannot be redrawn with \r, so on narrow terminals (a phone or tablet SSH
+# client) every redraw would leave another copy of the line behind.
+fit_to_terminal() {
+  local text="$1" reserve="$2" cols max
+  cols="$(stty size < /dev/tty 2>/dev/null | cut -d' ' -f2)" || cols=""
+  [[ "$cols" =~ ^[1-9][0-9]*$ ]] || cols="${COLUMNS:-80}"
+  [[ "$cols" =~ ^[1-9][0-9]*$ ]] || cols=80
+  max=$((cols - reserve))
+  if (( max > 10 && ${#text} > max )); then
+    text="${text:0:max}"
+  fi
+  printf '%s' "$text"
+}
+
 # run_step <label> <command...>: one status line instead of the full output.
 # Steps are never called as `run_step ... || handler`: inside an || list bash
 # ignores `set -e`, also in the background job, so a failing command would
@@ -85,7 +100,7 @@ run_step() {
   pid=$!
   if [[ -t 1 ]]; then
     while kill -0 "$pid" 2>/dev/null; do
-      printf '\r%s... %s ' "$prefix" "$(format_elapsed $((SECONDS - start)))"
+      printf '\r\033[K%s... %s' "$(fit_to_terminal "$prefix" 12)" "$(format_elapsed $((SECONDS - start)))"
       sleep 1
     done
   else
@@ -98,7 +113,7 @@ run_step() {
   local result="${GREEN}done${NC}"
   [[ "$rc" -eq 0 ]] || result="${RED}failed${NC}"
   if [[ -t 1 ]]; then
-    printf '\r%s... %b (%s)   \n' "$prefix" "$result" "$took"
+    printf '\r\033[K%s... %b (%s)\n' "$prefix" "$result" "$took"
   else
     printf '%b (%s)\n' "$result" "$took"
   fi

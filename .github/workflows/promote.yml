@@ -39,6 +39,8 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
+          # Quita espacios sobrantes (p. ej. el que añade el teclado del móvil).
+          VERSION="$(printf '%s' "$VERSION" | tr -d '[:space:]')"
           VERSION="${VERSION#v}"
           if [[ ! "$VERSION" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
             echo "ERROR: '${VERSION}' no tiene formato de versión (AAAA.M.D o AAAA.M.D-N)."
