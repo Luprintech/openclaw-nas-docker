@@ -479,6 +479,10 @@ services:
     image: ${OPENCLAW_IMAGE:-ghcr.io/luprintech/openclaw-nas-docker:latest}
     restart: unless-stopped
     init: true
+    # Give the gateway time to release its state lock. If Docker has to kill
+    # it after the default 10 seconds, the next doctor run cannot enter
+    # maintenance and the update skips the data migration.
+    stop_grace_period: 60s
     security_opt:
       - no-new-privileges:true
     cap_drop:
