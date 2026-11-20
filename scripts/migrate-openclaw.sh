@@ -14,6 +14,9 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
 BACKUP_ROOT="${OPENCLAW_BACKUP_ROOT:-$PROJECT_DIR}"
+# Seconds to wait for a clean gateway shutdown before Docker kills it.
+STOP_TIMEOUT="${OPENCLAW_STOP_TIMEOUT:-90}"
+WARNINGS=0
 
 error() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -22,6 +25,20 @@ error() {
 
 warn() {
   printf 'WARN: %s\n' "$1" >&2
+  WARNINGS=$((WARNINGS + 1))
+}
+
+# Stop the gateway and report when Docker had to kill it: a killed gateway
+# leaves its state lock behind and doctor cannot enter maintenance.
+stop_gateway() {
+  local container exit_code
+  container="$(gateway_container)"
+  compose stop -t "$STOP_TIMEOUT" openclaw-gateway >/dev/null
+  [[ -n "$container" ]] || return 0
+  exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$container" 2>/dev/null || true)"
+  if [[ "$exit_code" == "137" ]]; then
+    warn "The gateway did not stop within ${STOP_TIMEOUT}s and was killed; its state lock may block the migration."
+  fi
 }
 
 compose() {
@@ -126,7 +143,7 @@ run_migrations() {
   backup_dir="$(backup_state "$container")"
   printf 'Backup created: %s\n' "$backup_dir"
 
-  compose stop openclaw-gateway >/dev/null
+  stop_gateway
   repair_runtime_ownership
   normalize_legacy_config
 
@@ -152,7 +169,7 @@ wait_for_gateway() {
 
 configure_proxy() {
   patch_nginx_forwarded_headers
-  compose stop openclaw-gateway >/dev/null || true
+  compose stop -t "$STOP_TIMEOUT" openclaw-gateway >/dev/null || true
   configure_gateway_proxy
   compose up -d openclaw-gateway >/dev/null
   wait_for_gateway
@@ -166,7 +183,11 @@ upgrade() {
 
   run_migrations
   configure_proxy
-  printf 'OpenClaw maintenance completed. Verify with: docker compose ps\n'
+  if [[ "$WARNINGS" -gt 0 ]]; then
+    printf 'OpenClaw maintenance completed with %s warning(s). Check them above, then run ./openclaw update again; the data migration may not have finished.\n' "$WARNINGS"
+  else
+    printf 'OpenClaw maintenance completed. Verify with: docker compose ps\n'
+  fi
 }
 
 case "${1:-upgrade}" in

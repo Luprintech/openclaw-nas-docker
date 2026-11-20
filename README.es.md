@@ -633,6 +633,22 @@ o si borraste el contenedor en Container Manager. Tus datos de `config/` y
 ./openclaw update
 ```
 
+### `Doctor could not enter maintenance` / `cannot verify Gateway ownership`
+
+El gateway no soltó su bloqueo de estado antes de empezar la migración,
+normalmente porque Docker lo mató en lugar de pararse de forma limpia. La
+actualización termina entonces con `completed with N warning(s)` y puede que la
+migración de datos no se haya completado. Espera un minuto y vuelve a
+actualizar:
+
+```bash
+./openclaw update
+```
+
+Los contenedores dan al gateway hasta 60 segundos para pararse (90 durante una
+actualización; cámbialo con `OPENCLAW_STOP_TIMEOUT`), y eso normalmente lo
+evita.
+
 ### La Control UI no carga después de actualizar
 
 Seguramente actualizaste con `docker compose pull` / `up -d` en lugar de

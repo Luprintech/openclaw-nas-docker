@@ -614,6 +614,20 @@ safe. Start the stack and update again:
 ./openclaw update
 ```
 
+### `Doctor could not enter maintenance` / `cannot verify Gateway ownership`
+
+The gateway did not release its state lock before the migration started,
+usually because it was killed instead of stopping cleanly. The update then ends
+with `completed with N warning(s)` and the data migration may not have
+finished. Wait a minute and run the update again:
+
+```bash
+./openclaw update
+```
+
+The stack gives the gateway up to 60 seconds to stop (90 seconds during an
+update; set `OPENCLAW_STOP_TIMEOUT` to change it), which normally prevents this.
+
 ### The Control UI does not load after an update
 
 You probably updated with `docker compose pull` / `up -d` instead of
