@@ -1,8 +1,10 @@
 name: Build and publish Docker image
 
 # Publica la imagen como candidata, nunca como estable:
-#   :<versión>  versión fija, inmutable a efectos prácticos
-#   :edge       última versión que ha pasado el smoke test
+#   :<etiqueta>  inmutable: nunca se sobrescribe. La primera publicación de
+#                una versión de OpenClaw usa la versión tal cual (2026.11.6);
+#                cada reconstrucción posterior añade un sufijo (2026.11.6-1).
+#   :edge        última candidata publicada
 # El tag :latest (el que usan los usuarios) solo lo mueve promote.yml,
 # después de validar la versión en un Synology real.
 
@@ -12,6 +14,7 @@ on:
       - main
     paths:
       - Dockerfile
+      - entrypoint.sh
       - .last-openclaw-version
       - .github/workflows/docker-publish.yml
   workflow_dispatch:
@@ -20,6 +23,9 @@ permissions:
   contents: write
   packages: write
   issues: write
+  id-token: write          # attestation de procedencia
+  attestations: write
+  security-events: write   # resultados de Trivy en la pestaña Security
 
 concurrency:
   group: docker-publish
@@ -28,13 +34,14 @@ concurrency:
 env:
   GHCR_IMAGE: ghcr.io/luprintech/openclaw-nas-docker
   DOCKERHUB_IMAGE: luprintechdev/openclaw-nas-docker
+  TRIVY_VERSION: v0.76.2
 
 jobs:
   docker:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Read OpenClaw version
         id: version
@@ -45,24 +52,57 @@ jobs:
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      # Una etiqueta publicada no se reutiliza nunca: si ya existe en
+      # cualquiera de los dos registros, se busca el siguiente sufijo libre.
+      # Si un registro no responde, el job falla en vez de arriesgarse a
+      # sobrescribir una etiqueta existente.
+      - name: Choose immutable image tag
+        id: tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          taken() {
+            local ref out
+            for ref in "${GHCR_IMAGE}:$1" "${DOCKERHUB_IMAGE}:$1"; do
+              if out="$(docker buildx imagetools inspect "$ref" 2>&1)"; then
+                return 0
+              fi
+              if ! grep -qiE 'not found|manifest unknown' <<< "$out"; then
+                echo "::error::Cannot check whether ${ref} exists: ${out}"
+                exit 1
+              fi
+            done
+            return 1
+          }
+
+          TAG="$VERSION"
+          N=0
+          while taken "$TAG"; do
+            N=$((N + 1))
+            TAG="${VERSION}-${N}"
+          done
+
+          echo "Image tag: ${TAG}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build and push candidate
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: true
@@ -72,15 +112,59 @@ jobs:
             OPENCLAW_VERSION=${{ steps.version.outputs.version }}
           labels: |
             org.opencontainers.image.title=openclaw-nas-docker
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.version.outputs.created }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
-            ${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.GHCR_IMAGE }}:${{ steps.tag.outputs.tag }}
             ${{ env.GHCR_IMAGE }}:edge
-            ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.DOCKERHUB_IMAGE }}:${{ steps.tag.outputs.tag }}
             ${{ env.DOCKERHUB_IMAGE }}:edge
+
+      # Prueba firmada de que la imagen salió de este workflow y de este
+      # commit. Se comprueba con:
+      #   gh attestation verify oci://ghcr.io/luprintech/openclaw-nas-docker:<tag> \
+      #     --repo luprintech/openclaw-nas-docker
+      # El digest es el mismo en GHCR y Docker Hub, así que vale para ambos.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.GHCR_IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: false
+
+      # Solo informa: la mayoría de las vulnerabilidades vienen de la imagen
+      # base de OpenClaw y no se pueden corregir aquí. Los resultados quedan
+      # en Security → Code scanning y en el resumen del job.
+      - name: Scan image with Trivy (SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          limit-severities-for-sarif: 'true'
+          exit-code: '0'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
+
+      - name: Scan image with Trivy (summary)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.build.outputs.digest }}
+          format: table
+          output: trivy-results.txt
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+          skip-setup-trivy: true
 
       # La release nace como prerelease. promote.yml la convierte en la
       # release "Latest" cuando la versión pasa a estable.
@@ -88,12 +172,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          TAG="v${VERSION}"
+          TAG="v${IMAGE_TAG}"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release ${TAG} already exists, skipping."
             exit 0
+          fi
+
+          REBUILD=""
+          if [[ "$IMAGE_TAG" != "$VERSION" ]]; then
+            REBUILD="Reconstrucción de la imagen para OpenClaw ${VERSION} (cambios en este repositorio, misma versión de OpenClaw)."
           fi
 
           cat > release-notes.md << EOF
@@ -101,10 +191,12 @@ jobs:
 
           > **Release candidate.** Ha pasado el smoke test en CI, pero todavía no se ha validado en un Synology real. El tag \`:latest\` no apunta aquí hasta que se promocione.
 
+          OpenClaw ${VERSION}. ${REBUILD}
+
           ## Docker images
 
-              ghcr.io/luprintech/openclaw-nas-docker:${VERSION}
-              luprintechdev/openclaw-nas-docker:${VERSION}
+              ghcr.io/luprintech/openclaw-nas-docker:${IMAGE_TAG}
+              luprintechdev/openclaw-nas-docker:${IMAGE_TAG}
 
           ## Install
 
@@ -122,11 +214,11 @@ jobs:
       - name: Open validation issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           DIGEST: ${{ steps.build.outputs.digest }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TITLE="Validate OpenClaw ${VERSION} on Synology"
+          TITLE="Validate OpenClaw ${IMAGE_TAG} on Synology"
 
           gh label create release-candidate --color FBCA04 \
             --description "Published as edge, pending validation before promotion to latest" \
@@ -137,29 +229,29 @@ jobs:
             --jq ".[] | select(.title != \"${TITLE}\") | .number" |
           while read -r OLD; do
             gh issue close "$OLD" --reason "not planned" \
-              --comment "Sustituida por OpenClaw ${VERSION}."
+              --comment "Sustituida por ${IMAGE_TAG}."
           done
 
-          EXISTING="$(gh issue list --state open --label release-candidate \
-            --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')"
+          EXISTING="$(gh issue list --state open --label release-candidate --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -n 1)"
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" \
-              --body "Imagen reconstruida (digest \`${DIGEST}\`). Logs: ${RUN_URL}"
+              --body "Imagen publicada de nuevo (digest \`${DIGEST}\`). Logs: ${RUN_URL}"
             exit 0
           fi
 
           gh issue create \
             --label release-candidate \
             --title "$TITLE" \
-            --body "OpenClaw \`${VERSION}\` ha pasado el smoke test y está publicada como candidata:
+            --body "\`${IMAGE_TAG}\` ha pasado el smoke test y está publicada como candidata:
 
           \`\`\`
-          ghcr.io/luprintech/openclaw-nas-docker:${VERSION}
+          ghcr.io/luprintech/openclaw-nas-docker:${IMAGE_TAG}
           ghcr.io/luprintech/openclaw-nas-docker:edge
           \`\`\`
 
           Digest: \`${DIGEST}\`
-          Logs: ${RUN_URL}
+          Logs y vulnerabilidades: ${RUN_URL}
 
           ## Validación en el NAS
 
@@ -172,21 +264,27 @@ jobs:
 
           ## Promoción
 
-          Cuando todo esté marcado: **Actions → Promote to stable → Run workflow** con la versión \`${VERSION}\`. Ese workflow cierra este issue."
+          Cuando todo esté marcado: **Actions → Promote to stable → Run workflow** con la versión \`${IMAGE_TAG}\`. Ese workflow cierra este issue."
 
       - name: Summary
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           {
-            echo "## Candidata publicada: ${VERSION}"
+            echo "## Candidata publicada: ${IMAGE_TAG}"
             echo
             echo "| Tag | Estado |"
             echo "|---|---|"
-            echo "| \`:${VERSION}\` | publicado |"
+            echo "| \`:${IMAGE_TAG}\` | publicado |"
             echo "| \`:edge\` | publicado |"
             echo "| \`:latest\` | sin cambios, requiere promoción |"
             echo
             echo "Digest: \`${DIGEST}\`"
+            echo
+            echo "### Vulnerabilidades HIGH/CRITICAL con corrección disponible"
+            echo
+            echo '```'
+            cat trivy-results.txt 2>/dev/null || echo "Trivy did not produce a report."
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
