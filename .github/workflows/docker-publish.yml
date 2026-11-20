@@ -1,5 +1,11 @@
 name: Build and publish Docker image
 
+# Publica la imagen como candidata, nunca como estable:
+#   :<versión>  versión fija, inmutable a efectos prácticos
+#   :edge       última versión que ha pasado el smoke test
+# El tag :latest (el que usan los usuarios) solo lo mueve promote.yml,
+# después de validar la versión en un Synology real.
+
 on:
   push:
     branches:
@@ -13,6 +19,11 @@ on:
 permissions:
   contents: write
   packages: write
+  issues: write
+
+concurrency:
+  group: docker-publish
+  cancel-in-progress: false
 
 env:
   GHCR_IMAGE: ghcr.io/luprintech/openclaw-nas-docker
@@ -31,6 +42,7 @@ jobs:
           VERSION="$(tr -d '[:space:]' < .last-openclaw-version)"
           [[ -n "$VERSION" ]] || { echo "ERROR: .last-openclaw-version is empty"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -48,7 +60,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
+      - name: Build and push candidate
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -57,26 +70,36 @@ jobs:
           platforms: linux/amd64
           build-args: |
             OPENCLAW_VERSION=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=openclaw-nas-docker
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.version.outputs.created }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
-            ${{ env.GHCR_IMAGE }}:latest
             ${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}
-            ${{ env.DOCKERHUB_IMAGE }}:latest
+            ${{ env.GHCR_IMAGE }}:edge
             ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.DOCKERHUB_IMAGE }}:edge
 
-      - name: Create GitHub Release
+      # La release nace como prerelease. promote.yml la convierte en la
+      # release "Latest" cuando la versión pasa a estable.
+      - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           TAG="v${VERSION}"
 
-          if git ls-remote --tags origin | grep -q "refs/tags/${TAG}$"; then
-            echo "Tag ${TAG} already exists — skipping release creation"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists, skipping."
             exit 0
           fi
 
           cat > release-notes.md << EOF
-          OpenClaw NAS Docker — ${TAG}
+          OpenClaw NAS Docker ${TAG}
+
+          > **Release candidate.** Ha pasado el smoke test en CI, pero todavía no se ha validado en un Synology real. El tag \`:latest\` no apunta aquí hasta que se promocione.
 
           ## Docker images
 
@@ -90,7 +113,80 @@ jobs:
           See [README](https://github.com/luprintech/openclaw-nas-docker#readme) for full setup instructions.
           EOF
 
-          gh release create "${TAG}" \
-            --title "${TAG}" \
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
             --notes-file release-notes.md \
-            --latest
+            --prerelease
+
+      - name: Open validation issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="Validate OpenClaw ${VERSION} on Synology"
+
+          gh label create release-candidate --color FBCA04 \
+            --description "Published as edge, pending validation before promotion to latest" \
+            2>/dev/null || true
+
+          # Una candidata nueva deja obsoletas las anteriores sin promocionar.
+          gh issue list --state open --label release-candidate --json number,title \
+            --jq ".[] | select(.title != \"${TITLE}\") | .number" |
+          while read -r OLD; do
+            gh issue close "$OLD" --reason "not planned" \
+              --comment "Sustituida por OpenClaw ${VERSION}."
+          done
+
+          EXISTING="$(gh issue list --state open --label release-candidate \
+            --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" \
+              --body "Imagen reconstruida (digest \`${DIGEST}\`). Logs: ${RUN_URL}"
+            exit 0
+          fi
+
+          gh issue create \
+            --label release-candidate \
+            --title "$TITLE" \
+            --body "OpenClaw \`${VERSION}\` ha pasado el smoke test y está publicada como candidata:
+
+          \`\`\`
+          ghcr.io/luprintech/openclaw-nas-docker:${VERSION}
+          ghcr.io/luprintech/openclaw-nas-docker:edge
+          \`\`\`
+
+          Digest: \`${DIGEST}\`
+          Logs: ${RUN_URL}
+
+          ## Validación en el NAS
+
+          - [ ] Actualización desde la estable actual con \`./openclaw update\` sin errores
+          - [ ] \`docker compose ps\`: gateway \`healthy\`
+          - [ ] Logs sin \`degraded\`, \`EPERM\` fatal ni \`openat2\`
+          - [ ] Control UI carga por HTTPS y el navegador sigue emparejado
+          - [ ] Un mensaje de prueba al agente obtiene respuesta
+          - [ ] \`./openclaw claude --version\` funciona
+
+          ## Promoción
+
+          Cuando todo esté marcado: **Actions → Promote to stable → Run workflow** con la versión \`${VERSION}\`. Ese workflow cierra este issue."
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "## Candidata publicada: ${VERSION}"
+            echo
+            echo "| Tag | Estado |"
+            echo "|---|---|"
+            echo "| \`:${VERSION}\` | publicado |"
+            echo "| \`:edge\` | publicado |"
+            echo "| \`:latest\` | sin cambios, requiere promoción |"
+            echo
+            echo "Digest: \`${DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -513,35 +513,51 @@ operator's evidence.
 > Docker still reports the gateway as healthy, and the Control UI does not load.
 > If that already happened, run `bash scripts/migrate-openclaw.sh upgrade`.
 
-Manual version pin update, usually only needed by maintainers:
+Manual version pin update, only needed by maintainers (CI does this
+automatically):
 
 ```bash
 ./openclaw update-version
 ```
 
-### Synology compatibility test target
+### Release channels
 
-The scheduled updater checks for new OpenClaw releases every six hours and
-needs no manual step. For each new release it builds the candidate image and
-runs `scripts/smoke-test.sh` on a CI runner: clean start, upgrade from the
-currently published image on the same `./config`, healthy gateway and a working
-`claude` CLI. It also fails if the gateway ends up degraded, because `/healthz`
-reports healthy even when the agent database has not been migrated. If everything passes, it updates `.last-openclaw-version` on
-`main` and triggers the Docker publication workflow. If it fails, nothing is
-published and an issue labelled `openclaw-update-failed` is opened. Close that
-issue and run the workflow manually to retry the same version.
+Every image is published under several tags. Pick the one that matches how
+much risk you accept:
 
-CI runners use a modern kernel, so this test does not reproduce the Linux 4.4
-kernels of some Synology models. If you need that extra gate, set
-`OPENCLAW_MAX_VERSION` and test those versions on the NAS before raising it.
+| Tag | Updated | Use it if |
+| --- | ------- | --------- |
+| `latest` (default) | Only after the version has been validated on a real Synology NAS | You want a stable NAS. This is what `install.sh` and `docker-compose.yml` use. |
+| `edge` | Automatically, as soon as a new OpenClaw release passes CI | You want new releases early and can recover from a broken update. |
+| `<version>` (e.g. `2026.11.6`) | Never moves once published | You want to pin an exact version. |
 
-Direct or manual version updates are capped at `2026.10.5` (`MAX_VERSION` in
-`scripts/update-openclaw-version.sh`) because that is the latest version
-validated on Synology NAS devices with older Linux 4.4 kernels, including
-DS220+ deployments. The automatic workflow does not apply this cap. Raise the
-cap only after repeating that validation on the target NAS. For a single run you can
-override it with `OPENCLAW_MAX_VERSION=<version>`, or remove it with an empty
-`OPENCLAW_MAX_VERSION=` to follow the latest official release.
+How a version reaches `latest`:
+
+1. Every six hours a scheduled workflow checks for a new **stable** OpenClaw
+   release (prereleases are ignored) whose Docker image is already published.
+2. CI builds the candidate and runs `scripts/smoke-test.sh`: clean start,
+   upgrade from the current `latest` on the same `./config`, healthy gateway,
+   no degraded agent database and a working `claude` CLI. If it fails, nothing
+   is published and an issue labelled `openclaw-update-failed` is opened.
+3. If it passes, the version is pinned on `main` and published as
+   `:<version>` and `:edge`, together with a GitHub prerelease and an issue
+   labelled `release-candidate`.
+4. The maintainer tests that image on a Synology NAS. CI runners use a modern
+   kernel and cannot reproduce problems specific to the Linux 4.4 kernels of
+   some Synology models (for example missing `openat2`).
+5. The **Promote to stable** workflow retags that exact image as `latest`
+   without rebuilding it and marks the GitHub release as latest. Running it
+   with an older version rolls `latest` back.
+
+To follow `edge`, set it in `.env` and update as usual:
+
+```bash
+OPENCLAW_IMAGE=ghcr.io/luprintech/openclaw-nas-docker:edge
+```
+
+Clear the value (`OPENCLAW_IMAGE=`) to go back to `latest`. Moving from `edge`
+to an older `latest` is a downgrade: restore the backup created by
+`./openclaw update` instead of only switching tags.
 
 ### Reverse-proxy trust on OpenClaw 2026.9+
 
@@ -579,9 +595,9 @@ docker compose exec openclaw-gateway node dist/index.js --version
 
 If the plugin still asks for a newer API than the version printed, it was
 published for a release that this repository has not validated and published
-yet. New OpenClaw versions reach the image only after they are tested on
-Synology (see [Synology compatibility test target](#synology-compatibility-test-target)),
-so wait for the next release of this repository and update again.
+yet. New OpenClaw versions reach `latest` only after they are tested on
+Synology (see [Release channels](#release-channels)), so wait for the next
+promotion and update again, or switch to `edge` if you accept the risk.
 
 ### EACCES: permission denied
 
