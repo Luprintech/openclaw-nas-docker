@@ -1,8 +1,10 @@
 name: Update OpenClaw version
 
-# Flujo automático, sin PRs:
+# Flujo automático:
 #   detectar versión nueva -> construir candidata -> smoke test ->
-#   si pasa: actualizar main y publicar; si falla: abrir un issue.
+#   si pasa: fijarla en main (vía PR) y publicarla como :<versión> y :edge;
+#   si falla: abrir un issue.
+# :latest no se toca aquí: lo mueve promote.yml tras validar en un Synology.
 
 on:
   schedule:
@@ -29,7 +31,6 @@ jobs:
     outputs:
       changed: ${{ steps.check.outputs.changed }}
       version: ${{ steps.check.outputs.version }}
-      current: ${{ steps.check.outputs.current }}
 
     steps:
       - uses: actions/checkout@v4
@@ -43,8 +44,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x scripts/update-openclaw-version.sh
-          CURRENT="$(tr -d '[:space:]' < .last-openclaw-version)"
-          scripts/update-openclaw-version.sh --propose
+          scripts/update-openclaw-version.sh
 
           if git diff --quiet .last-openclaw-version; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -65,7 +65,6 @@ jobs:
 
           echo "changed=true"     >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
 
   validate:
     needs: detect
@@ -90,12 +89,14 @@ jobs:
             OPENCLAW_VERSION=${{ needs.detect.outputs.version }}
           tags: openclaw-candidate:${{ needs.detect.outputs.version }}
 
-      - name: Smoke test (clean start + upgrade from published image)
+      # La actualización se prueba desde :latest, que es lo que tienen
+      # instalado los usuarios.
+      - name: Smoke test (clean start + upgrade from stable)
         run: |
           chmod +x scripts/smoke-test.sh
           scripts/smoke-test.sh \
             "openclaw-candidate:${{ needs.detect.outputs.version }}" \
-            "${{ env.GHCR_IMAGE }}:${{ needs.detect.outputs.current }}"
+            "${{ env.GHCR_IMAGE }}:latest"
 
   release:
     needs: [detect, validate]
