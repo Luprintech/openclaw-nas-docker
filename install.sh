@@ -1432,7 +1432,9 @@ print_next_steps() {
   printf '  %b./openclaw help%b     all commands\n' "$BLUE" "$NC"
 
   [[ -n "$LOG_FILE" ]] && printf '\n  Install log: %s\n' "$LOG_FILE"
-  printf '\n%bKeep OpenClaw LAN-only: do not port-forward it on your router.%b\n\n' "$YELLOW" "$NC"
+  printf '\n%bKeep OpenClaw LAN-only: do not port-forward it on your router.%b\n' "$YELLOW" "$NC"
+  printf '\n⭐ Useful? Star the project so other NAS users can find it:\n'
+  printf '   https://github.com/Luprintech/openclaw-nas-docker\n\n'
 }
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

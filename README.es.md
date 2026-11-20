@@ -12,6 +12,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Luprintech/openclaw-nas-docker/stargazers"><img src="https://img.shields.io/github/stars/Luprintech/openclaw-nas-docker?style=for-the-badge&logo=github&label=Dale%20una%20estrella&color=f5c518" alt="Dale una estrella al repositorio en GitHub"/></a>
+</p>
+
+<p align="center">
   <img src="assets/openclaw-nas.png" alt="Despliegue de OpenClaw en un NAS con Docker" width="720"/>
 </p>
 
@@ -34,6 +38,11 @@ construye en local:
 GitHub Actions construye la imagen a partir del `Dockerfile`, la prueba y la
 publica; `docker-compose.yml` solo la descarga y la ejecuta.
 
+> [!TIP]
+> **¿Te resulta útil este proyecto?** ⭐ [Dale una estrella en GitHub](https://github.com/Luprintech/openclaw-nas-docker)
+> para que otras personas con NAS lo encuentren. Es un clic y ayuda a que el
+> proyecto siga adelante.
+
 ## Índice
 
 - [Requisitos](#requisitos)
@@ -49,6 +58,7 @@ publica; `docker-compose.yml` solo la descarga y la ejecuta.
 - [Instalar skills de Python](#instalar-skills-de-python)
 - [Solución de problemas](#solución-de-problemas)
 - [Normas de seguridad](#normas-de-seguridad)
+- [Apoya el proyecto](#apoya-el-proyecto)
 - [Documentos del proyecto](#documentos-del-proyecto)
 
 ---
@@ -216,8 +226,18 @@ grep OPENCLAW_GATEWAY_TOKEN .env
 El onboarding se ejecuta dentro del contenedor. Sigue las indicaciones para
 elegir tu proveedor de IA e introducir su clave de API o iniciar sesión.
 
-También puedes poner las claves de los proveedores en `.env`. Las entradas
-admitidas son `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+**Añade o cambia las claves de API desde el navegador.** Cuando tu navegador
+esté emparejado (paso 6), abre el panel y ve a **Settings → Models → Add
+account**. Pega la clave de API o inicia sesión con el proveedor. OpenClaw
+comprueba la clave en el momento, y **Test access** la vuelve a comprobar más
+adelante. Para cambiar la configuración de modelos necesitas permisos de
+administración en el panel. Las claves guardadas así se almacenan en el
+almacén de credenciales de OpenClaw, dentro de `config/`, así que se conservan
+al actualizar y entran en las copias de seguridad. Es la opción más sencilla
+para la mayoría de usuarios.
+
+**O pon las claves de los proveedores en `.env`**, útil para automatizar. Las
+entradas admitidas son `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
 `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY` y `COHERE_API_KEY`.
 Después de editar `.env`, aplica el cambio con:
 
@@ -773,6 +793,16 @@ LAN, y configura Nginx para que sobrescriba `X-Forwarded-For` con la dirección
 real del cliente. Solo añade la IP actual del contenedor de Nginx a
 `gateway.trustedProxies`, y `./openclaw update` la actualiza. No la sustituyas
 por una subred amplia de Docker.
+
+---
+
+## Apoya el proyecto
+
+Si OpenClaw en NAS te ahorra tiempo, la mejor forma de apoyarlo es
+⭐ [darle una estrella al repositorio](https://github.com/Luprintech/openclaw-nas-docker).
+Las estrellas ayudan a que otras personas con NAS lo encuentren. También son
+bienvenidos los avisos de errores y los pull requests (consulta
+[Cómo contribuir](CONTRIBUTING.es.md)).
 
 ---
 
