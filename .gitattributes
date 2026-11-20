@@ -7,3 +7,4 @@ install.sh text eol=lf
 *.md text eol=lf
 Dockerfile text eol=lf
 *.png binary
+*.conf text eol=lf
